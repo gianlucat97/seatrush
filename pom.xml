@@ -20,7 +20,9 @@
   </licenses>
 
   <!-- Modules are added by the milestones that introduce them (see README §26). -->
-  <modules />
+  <modules>
+    <module>libs/common</module>
+  </modules>
 
   <properties>
     <java.version>25</java.version>
@@ -42,7 +44,9 @@
     <maven-failsafe-plugin.version>3.6.0</maven-failsafe-plugin.version>
     <maven-enforcer-plugin.version>3.6.3</maven-enforcer-plugin.version>
     <spotless-maven-plugin.version>3.10.4</spotless-maven-plugin.version>
-    <google-java-format.version>1.37.0</google-java-format.version>
+    <!-- 1.37.0 never runs inside Spotless on JDK 25: every file fails with an
+         InvocationTargetException before it is formatted. -->
+    <google-java-format.version>1.36.1</google-java-format.version>
     <jacoco-maven-plugin.version>0.8.15</jacoco-maven-plugin.version>
   </properties>
 
