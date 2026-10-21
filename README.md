@@ -2,6 +2,8 @@
 
 **A distributed ticketing platform for high-demand "flash" on-sales: fair waiting room, zero overselling under extreme contention, and a real-time seat map.**
 
+[![CI](https://github.com/gianlucat97/seatrush/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/gianlucat97/seatrush/actions/workflows/ci.yml)
+
 > Status: 🚧 under active development. This document is the technical specification of the system; values marked *Target* are goals that will be validated by the benchmark suite.
 
 ---
@@ -1037,8 +1039,11 @@ Conventions every module follows, so the code base stays consistent.
 
 **Workflow**
 
-- Code formatted with Spotless; CI fails on unformatted code.
-- Commits follow Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`, `chore:`).
+- Code formatted with Spotless; the `format` job of [`ci.yml`](.github/workflows/ci.yml) fails on
+  unformatted code, and `make format` rewrites it.
+- Commit messages are `Feature - <module> - <summary>` followed by a bullet list of what changed;
+  the body of a pull request is that bullet list.
+- Features branch off `develop`, land through a pull request into `develop`, and reach `master` at a release.
 - Every architectural decision that changes this specification gets an ADR and an update to this README.
 
 **Definition of done for a feature**
