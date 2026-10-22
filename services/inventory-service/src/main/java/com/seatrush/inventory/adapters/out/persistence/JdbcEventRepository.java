@@ -84,6 +84,20 @@ public class JdbcEventRepository implements EventRepository {
   }
 
   @Override
+  public List<Event> findByStatus(EventStatus status) {
+    return jdbc.sql(
+            """
+            SELECT id, name, on_sale_at, status, created_at
+            FROM event
+            WHERE status = :status
+            ORDER BY on_sale_at, created_at
+            """)
+        .param("status", status.name())
+        .query(JdbcEventRepository::readEvent)
+        .list();
+  }
+
+  @Override
   public List<Section> findSections(UUID eventId) {
     return jdbc.sql(
             """
