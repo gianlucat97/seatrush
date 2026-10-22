@@ -23,6 +23,7 @@
   <modules>
     <module>libs/common</module>
     <module>libs/test-support</module>
+    <module>libs/messaging</module>
   </modules>
 
   <properties>
