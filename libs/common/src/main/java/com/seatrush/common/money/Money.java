@@ -1,5 +1,6 @@
 package com.seatrush.common.money;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import java.math.BigDecimal;
 import java.util.Currency;
 import java.util.Objects;
@@ -57,6 +58,13 @@ public record Money(long amountCents, Currency currency) implements Comparable<M
     return new Money(Math.multiplyExact(amountCents, factor), currency);
   }
 
+  /**
+   * Whether this is nothing.
+   *
+   * <p>Ignored by Jackson on purpose: it is a question about the amount, not a third field of it,
+   * and the JSON form of Money is the two fields above and nothing else.
+   */
+  @JsonIgnore
   public boolean isZero() {
     return amountCents == 0L;
   }
