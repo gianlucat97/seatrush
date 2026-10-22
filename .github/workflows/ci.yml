@@ -38,6 +38,21 @@ jobs:
       - name: Spotless
         run: ./mvnw -B -ntp spotless:check
 
+      # The local stack is configuration, so nothing in the build would catch a
+      # Compose file that no longer parses or an alert rule with a broken
+      # expression. Both checks are static: no container of the stack is started.
+      - name: Validate the local stack
+        run: |
+          docker compose \
+            --file deploy/docker-compose/docker-compose.yml \
+            --env-file .env.example \
+            config --quiet
+          docker run --rm \
+            --volume "$PWD/deploy/prometheus:/etc/prometheus:ro" \
+            --entrypoint promtool \
+            prom/prometheus:v3.15.1 \
+            check config /etc/prometheus/prometheus.yml
+
   verify:
     name: Build and test
     needs: format

@@ -1,0 +1,18 @@
+# Loads every dashboard JSON committed to deploy/grafana/dashboards (README section 14.4):
+# the three dashboards of that section arrive with M5, and land in a running Grafana
+# without a click because of this provider.
+apiVersion: 1
+
+providers:
+  - name: seatrush
+    orgId: 1
+    folder: SeatRush
+    type: file
+    # The repository is the source of truth: a dashboard edited in the UI is not saved
+    # back, and one deleted from the repository disappears from Grafana as well.
+    allowUiUpdates: false
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/dashboards
+      foldersFromFilesStructure: false

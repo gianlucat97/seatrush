@@ -1,0 +1,16 @@
+# The datasource of every provisioned dashboard (README section 14.4). Grafana reads this
+# on startup, so a dashboard committed to deploy/grafana/dashboards needs no manual setup.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: seatrush-prometheus
+    type: prometheus
+    access: proxy
+    # Inside the stack network; the published PROMETHEUS_PORT is for the host only.
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      # Matches the scrape interval, so Grafana does not suggest a step finer than the data.
+      timeInterval: 10s
+    editable: false

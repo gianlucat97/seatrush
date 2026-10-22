@@ -1,0 +1,48 @@
+# Alert rules of README section 14.4.
+#
+# Only the rules whose metric is defined in section 14.1 are written here. The remaining
+# three of that section (a SAGA past its deadline for more than a minute, capture retries
+# exhausted, a DLQ that is not empty) need a metric no service exposes yet, and are listed
+# at the bottom so the gap is visible rather than guessed at with an invented metric name.
+groups:
+  - name: seatrush-invariants
+    rules:
+      # I1, no seat sold twice, is enforced by the unique constraint on seat_sale. Every
+      # rejection means two orders reached the commit for the same seat, so the Redis
+      # state they were validated against was wrong. Nothing is oversold, but the hold
+      # path has a bug, and the counter is specified to stay at zero (section 14.1).
+      - alert: OversellPrevented
+        expr: increase(seatrush_oversell_prevented_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: The Postgres guard rejected a sale
+          description: >-
+            {{ $value }} sale(s) were rejected by the seat_sale guard in the last 5
+            minutes on {{ $labels.instance }}. No seat was oversold, but Redis and
+            Postgres disagreed on seat state: check the reconciler and the commit path.
+
+  - name: seatrush-pipelines
+    rules:
+      # Both relays (Postgres outbox and Redis stream) publish continuously, so this gauge
+      # sits near zero. A lag that stays above the 5s of section 14.4 means events are
+      # written but not reaching Kafka, which stalls every consumer downstream of them.
+      - alert: OutboxLagHigh
+        expr: seatrush_outbox_lag_seconds > 5
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Outbox lag above 5s in the {{ $labels.store }} relay"
+          description: >-
+            The oldest unpublished entry of the {{ $labels.store }} outbox on
+            {{ $labels.instance }} is {{ $value }}s old. Consumers are behind by at
+            least that much: check the relay and the broker.
+
+# Waiting on a metric:
+#   - a SAGA RUNNING past its deadline for more than a minute, which needs a gauge of the
+#     SAGAs whose deadline has passed (order-service, M2);
+#   - capture retries exhausted after the pivot, which needs a counter of the orders that
+#     ran out of retries (order-service, M2);
+#   - a DLQ that is not empty, which needs the Kafka exporter of section 14.1 and a rule
+#     on the end offset of every <topic>.dlq (M5).
