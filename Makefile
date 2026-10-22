@@ -5,6 +5,11 @@
 MVNW ?= ./mvnw
 MAVEN_FLAGS ?= -B -ntp
 
+# The local stack lives in one Compose file; --env-file is explicit because the file sits
+# in deploy/docker-compose and Compose would otherwise look for .env next to it.
+COMPOSE_FILE ?= deploy/docker-compose/docker-compose.yml
+COMPOSE ?= docker compose --file $(COMPOSE_FILE) --env-file .env
+
 .DEFAULT_GOAL := help
 .PHONY: help format build test-it clean up down seed ui load-small check
 
@@ -24,11 +29,16 @@ test-it: ## Full build including the integration tests (Testcontainers, needs Do
 clean: ## Remove every build output
 	$(MVNW) $(MAVEN_FLAGS) clean
 
-up: ## Start infrastructure, observability and all services (Docker Compose)
-	@echo "make up arrives with the Docker Compose infrastructure (M1)."; exit 1
+up: .env ## Start the local stack: infrastructure, observability and the services that exist
+	$(COMPOSE) up --detach --wait
 
-down: ## Stop everything and remove the volumes
-	@echo "make down arrives with the Docker Compose infrastructure (M1)."; exit 1
+down: .env ## Stop everything and remove the volumes
+	$(COMPOSE) down --volumes --remove-orphans
+
+# Copied once and then yours to edit: .env is git-ignored, .env.example is the template.
+.env:
+	@cp .env.example .env
+	@echo "created .env from .env.example"
 
 seed: ## Create a demo event with 2,000 seats, on-sale in 2 minutes
 	@echo "make seed arrives with the inventory service (M1)."; exit 1

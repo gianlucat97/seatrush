@@ -1,0 +1,3 @@
+The dashboards of README section 14.4 (on-sale overview, checkout SAGA, platform health)
+are committed here as JSON by M5. The directory itself is mounted into Grafana and read by
+the provider in ../provisioning/dashboards/seatrush.yml, so it has to exist before then.
