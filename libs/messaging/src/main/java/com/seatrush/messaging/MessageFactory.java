@@ -33,7 +33,21 @@ public final class MessageFactory {
    */
   public <T extends Message> MessageEnvelope<T> wrap(T payload) {
     Objects.requireNonNull(payload, "payload must not be null");
-    return envelope(payload, payload.partitionKey(), null);
+    return envelope(payload, payload.partitionKey(), null, clock.instant());
+  }
+
+  /**
+   * An envelope for something that already happened.
+   *
+   * <p>For a relay: the change was made and recorded by whoever made it, and this is only the
+   * moment it reaches Kafka. Stamping the envelope with the time of publication instead would make
+   * the propagation metric of README section 14.1 measure the lag of the relay as if it were the
+   * age of the event, and a message that waited in a buffer would look fresh.
+   */
+  public <T extends Message> MessageEnvelope<T> wrapAt(T payload, Instant occurredAt) {
+    Objects.requireNonNull(payload, "payload must not be null");
+    Objects.requireNonNull(occurredAt, "occurredAt must not be null");
+    return envelope(payload, payload.partitionKey(), null, occurredAt);
   }
 
   /**
@@ -46,12 +60,11 @@ public final class MessageFactory {
   public <T extends Message> MessageEnvelope<T> replyTo(MessageEnvelope<?> cause, T payload) {
     Objects.requireNonNull(cause, "cause must not be null");
     Objects.requireNonNull(payload, "payload must not be null");
-    return envelope(payload, cause.correlationId(), cause.messageId());
+    return envelope(payload, cause.correlationId(), cause.messageId(), clock.instant());
   }
 
   private <T extends Message> MessageEnvelope<T> envelope(
-      T payload, UUID correlationId, UUID causationId) {
-    Instant occurredAt = clock.instant();
+      T payload, UUID correlationId, UUID causationId, Instant occurredAt) {
     return new MessageEnvelope<>(
         ids.newId(),
         payload.type(),

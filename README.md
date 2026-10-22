@@ -1073,7 +1073,9 @@ Main properties (all overridable via environment variables):
 | `seatrush.checkout.capture-backoff` | order | `1s..60s` | Exponential backoff bounds |
 | `seatrush.outbox.poll-interval` | all | `100ms` | Postgres outbox relay period |
 | `seatrush.outbox.batch-size` | all | `500` | Rows per relay batch |
-| `seatrush.stream-relay.block-timeout` | inventory | `1s` | `XREADGROUP` block time |
+| `seatrush.stream-relay.poll-interval` | inventory | `100ms` | Seat event relay period |
+| `seatrush.stream-relay.batch-size` | inventory | `500` | Stream entries per relay pass |
+| `seatrush.stream-relay.claim-idle-after` | inventory | `30s` | Pending entries are claimed from a dead consumer after this |
 | `seatrush.realtime.batch-window` | realtime | `200ms` | Delta batching window |
 | `seatrush.sse.heartbeat-interval` | queue, realtime | `15s` | SSE keep-alive comment |
 | `seatrush.payment.decline-rate` | payment | `0.05` | Simulated decline rate |
