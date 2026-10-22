@@ -20,6 +20,13 @@
       <groupId>org.springframework</groupId>
       <artifactId>spring-web</artifactId>
     </dependency>
+    <!-- Annotations only, so Money keeps the JSON shape its javadoc promises wherever it is
+         serialized: without @JsonIgnore, Jackson reads isZero() as a property and every API
+         response and every Kafka message would carry a third field nobody declared. -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-annotations</artifactId>
+    </dependency>
     <!-- Auto-configuration of the Clock and IdGenerator beans. -->
     <dependency>
       <groupId>org.springframework.boot</groupId>

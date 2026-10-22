@@ -103,6 +103,9 @@ class MessageCodecTest {
     JsonNode payload =
         parse(codec.encodeToString(envelopeOf(SampleMessages.authorizePayment()))).get("payload");
 
+    assertThat(payload.get("amount").propertyNames())
+        .as("an amount is two fields, and a derived accessor is not a third one")
+        .containsExactlyInAnyOrder("amountCents", "currency");
     assertThat(payload.get("amount").get("amountCents").asLong()).isEqualTo(4500L);
     assertThat(payload.get("amount").get("currency").stringValue()).isEqualTo("EUR");
 
