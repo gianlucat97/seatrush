@@ -3,6 +3,11 @@ package com.seatrush.inventory.adapters.in.web;
 import com.seatrush.common.error.ErrorCode;
 import com.seatrush.common.error.ProblemDetails;
 import com.seatrush.inventory.domain.EventNotFoundException;
+import com.seatrush.inventory.domain.EventNotOnSaleException;
+import com.seatrush.inventory.domain.HoldNoLongerActiveException;
+import com.seatrush.inventory.domain.HoldNotFoundException;
+import com.seatrush.inventory.domain.HoldNotOwnedException;
+import com.seatrush.inventory.domain.HoldStatus;
 import com.seatrush.inventory.domain.IllegalEventTransitionException;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -45,6 +50,41 @@ public class ApiExceptionHandler {
         "Event %s is %s and cannot become %s"
             .formatted(failure.eventId(), failure.from(), failure.to()),
         Map.of("currentStatus", failure.from().name(), "requestedStatus", failure.to().name()));
+  }
+
+  @ExceptionHandler(HoldNotFoundException.class)
+  public ProblemDetail unknownHold(HoldNotFoundException failure) {
+    return ProblemDetails.of(ErrorCode.NOT_FOUND, "No hold with id " + failure.holdId());
+  }
+
+  @ExceptionHandler(HoldNotOwnedException.class)
+  public ProblemDetail notTheOwner(HoldNotOwnedException failure) {
+    return ProblemDetails.of(ErrorCode.FORBIDDEN, "This hold belongs to another user");
+  }
+
+  /**
+   * A hold that is no longer active, which is two different answers.
+   *
+   * <p>A hold in checkout or already consumed is in use by an order, so the client is told it is
+   * taken; one that was released or expired is simply gone, which is what 410 means. Both carry the
+   * status, so a client does not have to guess which of the two it got.
+   */
+  @ExceptionHandler(HoldNoLongerActiveException.class)
+  public ProblemDetail holdNoLongerActive(HoldNoLongerActiveException failure) {
+    boolean inUse =
+        failure.status() == HoldStatus.CHECKOUT || failure.status() == HoldStatus.CONSUMED;
+    ErrorCode code = inUse ? ErrorCode.HOLD_ALREADY_USED : ErrorCode.HOLD_EXPIRED;
+    String detail = inUse ? "This hold is being used by an order" : "This hold is no longer active";
+    return ProblemDetails.of(code, detail, Map.of("holdStatus", failure.status().name()));
+  }
+
+  /** Seats of an event whose sale is not open cannot be held (README section 6.3). */
+  @ExceptionHandler(EventNotOnSaleException.class)
+  public ProblemDetail notOnSale(EventNotOnSaleException failure) {
+    return ProblemDetails.of(
+        ErrorCode.EVENT_NOT_ON_SALE,
+        "Event %s is not on sale".formatted(failure.eventId()),
+        Map.of("eventStatus", failure.status().name()));
   }
 
   /** A request that failed its own constraints, with the offending fields listed. */

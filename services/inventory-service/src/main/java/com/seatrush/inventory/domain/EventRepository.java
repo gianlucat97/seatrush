@@ -26,6 +26,14 @@ public interface EventRepository {
   /** Every event, soonest sale first, which is the order the catalog is listed in. */
   List<Event> findAll();
 
+  /**
+   * Every event in one status, which is how the sweeper finds the sales that are open.
+   *
+   * <p>A query and not a cached list, because the set changes while the service runs: an event
+   * opened a second ago has holds that will expire like any other.
+   */
+  List<Event> findByStatus(EventStatus status);
+
   List<Section> findSections(UUID eventId);
 
   /**

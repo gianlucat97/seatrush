@@ -57,6 +57,11 @@ final class InMemoryCatalog implements EventRepository, SeatRepository, SeatSale
   }
 
   @Override
+  public List<Event> findByStatus(EventStatus status) {
+    return findAll().stream().filter(event -> event.status() == status).toList();
+  }
+
+  @Override
   public List<Section> findSections(UUID eventId) {
     return sections.getOrDefault(eventId, List.of());
   }

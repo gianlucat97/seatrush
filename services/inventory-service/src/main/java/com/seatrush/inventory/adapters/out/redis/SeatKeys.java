@@ -33,4 +33,29 @@ public final class SeatKeys {
   public static String available(UUID eventId) {
     return "seats:" + tag(eventId) + ":available";
   }
+
+  /** HASH: one hold, with its user, seats, expiry and status. */
+  public static String hold(UUID eventId, UUID holdId) {
+    return "hold:" + tag(eventId) + ":" + holdId;
+  }
+
+  /** ZSET: the ACTIVE holds of an event, scored by the instant each one expires. */
+  public static String holdExpiry(UUID eventId) {
+    return "holds:" + tag(eventId) + ":expiry";
+  }
+
+  /** STRING: the active hold of one user for one event, which is how invariant I8 is enforced. */
+  public static String userHold(UUID eventId, UUID userId) {
+    return "userhold:" + tag(eventId) + ":" + userId;
+  }
+
+  /** STRING: the stored answer of one idempotency key of one user (README section 9.4). */
+  public static String idempotency(UUID eventId, UUID userId, String idempotencyKey) {
+    return "idem:" + tag(eventId) + ":" + userId + ":" + idempotencyKey;
+  }
+
+  /** STREAM: the seat events of an event, waiting for the relay to forward them to Kafka. */
+  public static String seatEvents(UUID eventId) {
+    return "seat-events:" + tag(eventId);
+  }
 }

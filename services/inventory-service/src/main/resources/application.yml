@@ -31,6 +31,19 @@ spring:
         # serialization features, so the key is no longer spring.jackson.serialization.
         write-dates-as-timestamps: false
 
+# The hold path (README section 22).
+seatrush:
+  hold:
+    # Five minutes is long enough to pick a payment method and short enough that a seat
+    # abandoned by one user is back before the next one gives up looking.
+    ttl: ${SEATRUSH_HOLD_TTL:5m}
+    # Anti-hoarding: one hold is a group of friends, not a reseller's basket.
+    max-seats: ${SEATRUSH_HOLD_MAX_SEATS:6}
+    # The sweeper runs on every pod, so a second of lag costs nothing and the seats of an
+    # abandoned hold are back almost immediately.
+    sweeper-interval: ${SEATRUSH_HOLD_SWEEPER_INTERVAL:1s}
+    sweeper-batch-size: ${SEATRUSH_HOLD_SWEEPER_BATCH_SIZE:500}
+
 server:
   port: ${SERVER_PORT:8081}
 

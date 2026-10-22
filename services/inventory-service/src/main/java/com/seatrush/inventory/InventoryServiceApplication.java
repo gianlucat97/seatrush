@@ -3,17 +3,22 @@ package com.seatrush.inventory;
 import com.seatrush.inventory.domain.LayoutGenerator;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 import org.springframework.context.annotation.Bean;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * The inventory service: events, venue layout, seat state, holds and the record of sales (README
  * section 6.3).
  *
- * <p>This milestone brings the catalog and the layout generator. Seat state, holds and the Redis
- * side of the service arrive with the features that follow, which is why there is no Redis
- * dependency here yet.
+ * <p>What is here today is the catalog, the layout generator, the seat state of a live sale and the
+ * hold path. The seat commit, the stream relay and the reconciler arrive with the features that
+ * follow.
  */
 @SpringBootApplication
+@ConfigurationPropertiesScan
+// The hold sweeper of README section 9.3 runs on a schedule, on every pod at once.
+@EnableScheduling
 public class InventoryServiceApplication {
 
   public static void main(String[] args) {
