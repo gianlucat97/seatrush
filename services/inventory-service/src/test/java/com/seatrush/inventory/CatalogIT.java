@@ -11,6 +11,7 @@ import com.seatrush.inventory.domain.EventStatus;
 import com.seatrush.inventory.domain.IllegalEventTransitionException;
 import com.seatrush.inventory.domain.Seat;
 import com.seatrush.testsupport.containers.PostgresSupport;
+import com.seatrush.testsupport.containers.RedisSupport;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
@@ -66,22 +67,28 @@ class CatalogIT {
   @Autowired private JdbcClient jdbc;
 
   /**
-   * Creates the database before the context starts.
+   * Points the service at both containers before the context starts.
    *
-   * <p>The work happens here rather than in a {@code @BeforeAll}, because the datasource is built
-   * while the context is prepared, which is earlier: by the time a lifecycle callback could run,
-   * Flyway would already have failed to connect.
+   * <p>The database is created here rather than in a {@code @BeforeAll}, because the datasource is
+   * built while the context is prepared, which is earlier: by the time a lifecycle callback could
+   * run, Flyway would already have failed to connect.
+   *
+   * <p>Redis belongs here too, even though this test asserts nothing about it: opening a sale warms
+   * the seat map up, so the catalog needs a Redis of its own. Leaving it out passes on a machine
+   * that happens to run the Compose stack on the default port and fails everywhere else.
    */
   @DynamicPropertySource
-  static void inventoryDatabase(DynamicPropertyRegistry registry) {
+  static void stores(DynamicPropertyRegistry registry) {
     PostgresSupport.dropDatabase(DATABASE);
     PostgresSupport.createDatabase(DATABASE);
     PostgresSupport.registerProperties(registry, DATABASE);
+    RedisSupport.registerProperties(registry);
   }
 
   @AfterEach
   void emptyTheCatalog() {
     jdbc.sql("TRUNCATE seat_sale, seat, section, event CASCADE").update();
+    RedisSupport.flushAll();
   }
 
   @Test

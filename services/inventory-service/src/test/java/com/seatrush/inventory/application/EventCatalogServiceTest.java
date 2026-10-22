@@ -29,9 +29,11 @@ class EventCatalogServiceTest {
 
   private final MutableClock clock = MutableClock.at(NOW);
   private final InMemoryCatalog catalog = new InMemoryCatalog();
+  private final InMemorySeatState fastPath = new InMemorySeatState();
   private final IdGenerator ids = new UuidV7Generator(clock);
+  private final SeatMapService seatMap = new SeatMapService(catalog, catalog, catalog, fastPath);
   private final EventCatalogService service =
-      new EventCatalogService(catalog, catalog, new LayoutGenerator(), ids, clock);
+      new EventCatalogService(catalog, catalog, seatMap, new LayoutGenerator(), ids, clock);
 
   @Test
   void createsADraftEventWithItsGeneratedVenue() {
@@ -82,6 +84,19 @@ class EventCatalogServiceTest {
 
     assertThat(scheduled.status()).isEqualTo(EventStatus.SCHEDULED);
     assertThat(catalog.findById(eventId).orElseThrow().status()).isEqualTo(EventStatus.SCHEDULED);
+  }
+
+  @Test
+  void openingWarmsUpTheSeatMapOfTheEvent() {
+    UUID eventId = service.create(command(section("A", 2, 3))).id();
+    service.schedule(eventId);
+
+    service.openForSale(eventId);
+
+    assertThat(fastPath.isWarm(eventId)).isTrue();
+    assertThat(fastPath.read(eventId))
+        .get()
+        .satisfies(state -> assertThat(state.size()).isEqualTo(6));
   }
 
   @Test

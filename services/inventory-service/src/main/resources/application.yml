@@ -13,6 +13,11 @@ spring:
     url: ${POSTGRES_URL:jdbc:postgresql://localhost:5432/seatrush_inventory}
     username: ${POSTGRES_USER:seatrush}
     password: ${POSTGRES_PASSWORD:seatrush}
+  data:
+    redis:
+      # The seat state of a live sale (README section 9.2).
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
   flyway:
     # The service owns the schema of its own database and migrates it on startup.
     enabled: true
