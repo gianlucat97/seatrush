@@ -5,14 +5,17 @@ import com.seatrush.inventory.domain.EventRepository;
 import com.seatrush.inventory.domain.EventStatus;
 import com.seatrush.inventory.domain.Seat;
 import com.seatrush.inventory.domain.SeatRepository;
+import com.seatrush.inventory.domain.SeatSaleRepository;
 import com.seatrush.inventory.domain.Section;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -23,11 +26,12 @@ import java.util.UUID;
  * mock would make those tests assertions about calls rather than about outcomes. The behaviour that
  * needs Postgres to be believed is covered by the integration tests.
  */
-final class InMemoryCatalog implements EventRepository, SeatRepository {
+final class InMemoryCatalog implements EventRepository, SeatRepository, SeatSaleRepository {
 
   private final Map<UUID, Event> events = new LinkedHashMap<>();
   private final Map<UUID, List<Section>> sections = new HashMap<>();
   private final Map<UUID, List<Seat>> seats = new HashMap<>();
+  private final Map<UUID, Set<String>> sold = new HashMap<>();
 
   /** Set to true to make every status update lose its race, as a concurrent one would. */
   private boolean statusUpdatesLose;
@@ -83,6 +87,21 @@ final class InMemoryCatalog implements EventRepository, SeatRepository {
   @Override
   public int countByEvent(UUID eventId) {
     return seats.getOrDefault(eventId, List.of()).size();
+  }
+
+  @Override
+  public Set<String> findSoldSeatIds(UUID eventId) {
+    return Set.copyOf(sold.getOrDefault(eventId, Set.of()));
+  }
+
+  @Override
+  public int countSoldSeats(UUID eventId) {
+    return sold.getOrDefault(eventId, Set.of()).size();
+  }
+
+  /** Records a sale, the way the commit procedure will once it exists. */
+  void sell(UUID eventId, String... seatIds) {
+    sold.computeIfAbsent(eventId, id -> new HashSet<>()).addAll(List.of(seatIds));
   }
 
   void loseEveryStatusUpdate() {

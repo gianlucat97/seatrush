@@ -29,6 +29,7 @@ public class EventCatalogService {
 
   private final EventRepository events;
   private final SeatRepository seats;
+  private final SeatMapService seatMap;
   private final LayoutGenerator layouts;
   private final IdGenerator ids;
   private final Clock clock;
@@ -36,11 +37,13 @@ public class EventCatalogService {
   public EventCatalogService(
       EventRepository events,
       SeatRepository seats,
+      SeatMapService seatMap,
       LayoutGenerator layouts,
       IdGenerator ids,
       Clock clock) {
     this.events = events;
     this.seats = seats;
+    this.seatMap = seatMap;
     this.layouts = layouts;
     this.ids = ids;
     this.clock = clock;
@@ -75,12 +78,18 @@ public class EventCatalogService {
    * Opens the sale now, whatever {@code onSaleAt} says: {@code SCHEDULED} to {@code ON_SALE}.
    *
    * <p>Forcing it is what makes a demo possible without waiting for a clock, and a benchmark
-   * repeatable (README section 12.2). The warm-up that loads the seat map into Redis will hook in
-   * here, which is why the transition is a method of its own rather than a parameter of {@link
-   * #schedule(UUID)}.
+   * repeatable (README section 12.2).
+   *
+   * <p>The seat map is loaded into the fast path before the status moves, never after. A hold is
+   * only accepted for an event that is {@code ON_SALE}, so warming up first means there is no
+   * instant in which holds are allowed against a seat map Redis does not have yet. The cost of the
+   * order is that a transition which then loses its race leaves a warm Redis behind for an event
+   * that is not on sale, which is correct state nobody is allowed to touch, and the next attempt
+   * writes it again.
    */
   @Transactional
   public Event openForSale(UUID eventId) {
+    seatMap.warmUp(eventId);
     return transition(eventId, EventStatus.ON_SALE);
   }
 
