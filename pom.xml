@@ -22,6 +22,7 @@
   <!-- Modules are added by the milestones that introduce them (see README §26). -->
   <modules>
     <module>libs/common</module>
+    <module>libs/test-support</module>
   </modules>
 
   <properties>
