@@ -14,6 +14,7 @@ import java.util.Objects;
 record ScriptReply(
     String status,
     String holdId,
+    String orderId,
     Long version,
     Long expiresAt,
     Integer freedSeats,
@@ -36,6 +37,10 @@ record ScriptReply(
 
   String requireHoldId() {
     return require(holdId, "holdId");
+  }
+
+  String requireOrderId() {
+    return require(orderId, "orderId");
   }
 
   int freedSeatsOrZero() {

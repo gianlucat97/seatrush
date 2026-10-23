@@ -41,6 +41,20 @@ public interface SeatHoldStore {
    */
   ReleaseResult expire(Hold hold, Instant now);
 
+  /**
+   * Hands a hold over to an order, which stops its countdown (README section 8.3).
+   *
+   * <p>The seat state is not touched: the seats were already held by this hold and still are, so
+   * there is no new version and nothing for the seat map to hear about. What changes is who owns
+   * the hold, and that the sweeper stops looking at it.
+   *
+   * <p>Idempotent for the same {@code orderId}, because the order-service retries a call it did not
+   * get an answer to; a second order asking for the same hold is refused.
+   *
+   * @param callerId the user the order claims the hold belongs to, or empty to skip the check
+   */
+  FreezeResult freeze(Hold hold, UUID orderId, Optional<UUID> callerId, Instant now);
+
   Optional<Hold> findHold(UUID eventId, UUID holdId);
 
   /**

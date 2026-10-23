@@ -4,6 +4,8 @@ import com.seatrush.common.error.ErrorCode;
 import com.seatrush.common.error.ProblemDetails;
 import com.seatrush.inventory.domain.EventNotFoundException;
 import com.seatrush.inventory.domain.EventNotOnSaleException;
+import com.seatrush.inventory.domain.HoldAlreadyFrozenException;
+import com.seatrush.inventory.domain.HoldExpiredException;
 import com.seatrush.inventory.domain.HoldNoLongerActiveException;
 import com.seatrush.inventory.domain.HoldNotFoundException;
 import com.seatrush.inventory.domain.HoldNotOwnedException;
@@ -76,6 +78,35 @@ public class ApiExceptionHandler {
     ErrorCode code = inUse ? ErrorCode.HOLD_ALREADY_USED : ErrorCode.HOLD_EXPIRED;
     String detail = inUse ? "This hold is being used by an order" : "This hold is no longer active";
     return ProblemDetails.of(code, detail, Map.of("holdStatus", failure.status().name()));
+  }
+
+  /**
+   * A hold whose countdown ran out before a checkout reached it (README section 8.3).
+   *
+   * <p>Its own code rather than the one above, because the status of such a hold is still {@code
+   * ACTIVE}: the sweeper has not run yet, and only the clock made it unusable. The expiry travels
+   * with it, so the caller can log how late it was.
+   */
+  @ExceptionHandler(HoldExpiredException.class)
+  public ProblemDetail holdExpired(HoldExpiredException failure) {
+    return ProblemDetails.of(
+        ErrorCode.HOLD_EXPIRED,
+        "This hold expired before the checkout started",
+        Map.of("expiresAt", failure.expiresAt().toString()));
+  }
+
+  /**
+   * A hold another order froze first.
+   *
+   * <p>The order that owns it is named, so the caller can tell a collision apart from its own
+   * retry; its own retry never arrives here, because the freeze answers it with the seats again.
+   */
+  @ExceptionHandler(HoldAlreadyFrozenException.class)
+  public ProblemDetail holdAlreadyFrozen(HoldAlreadyFrozenException failure) {
+    return ProblemDetails.of(
+        ErrorCode.HOLD_ALREADY_USED,
+        "This hold is being used by another order",
+        Map.of("orderId", failure.orderId().toString()));
   }
 
   /** Seats of an event whose sale is not open cannot be held (README section 6.3). */

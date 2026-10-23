@@ -1,5 +1,6 @@
 package com.seatrush.inventory.adapters.out.redis;
 
+import com.seatrush.inventory.domain.FreezeResult;
 import com.seatrush.inventory.domain.Hold;
 import com.seatrush.inventory.domain.HoldRequest;
 import com.seatrush.inventory.domain.HoldResult;
@@ -157,6 +158,47 @@ public class RedisSeatHoldStore implements SeatHoldStore {
             hold.eventId().toString());
 
     return releaseResultOf(run(scripts.expire(), holdKeys(hold), args));
+  }
+
+  @Override
+  public FreezeResult freeze(Hold hold, UUID orderId, Optional<UUID> callerId, Instant now) {
+    Objects.requireNonNull(hold, "hold must not be null");
+    Objects.requireNonNull(orderId, "orderId must not be null");
+    Objects.requireNonNull(now, "now must not be null");
+
+    // Only the two keys the freeze touches. The seats, the version and the stream are left out
+    // because a freeze changes none of them, and a key a script declares but never reads would
+    // claim a lock on a cluster for no reason.
+    List<String> keys =
+        List.of(SeatKeys.holdExpiry(hold.eventId()), SeatKeys.hold(hold.eventId(), hold.id()));
+
+    List<String> args =
+        List.of(
+            hold.id().toString(),
+            orderId.toString(),
+            callerId.map(UUID::toString).orElse(""),
+            Long.toString(now.toEpochMilli()));
+
+    ScriptReply reply = run(scripts.freeze(), keys, args);
+    return switch (reply.status()) {
+      case "OK" ->
+          new FreezeResult.Frozen(
+              new Hold(
+                  hold.id(),
+                  hold.eventId(),
+                  hold.userId(),
+                  reply.seatIdsOrElse(hold.seatIds()),
+                  Instant.ofEpochMilli(reply.requireExpiresAt()),
+                  HoldStatus.CHECKOUT),
+              UUID.fromString(reply.requireOrderId()));
+      case "ALREADY_FROZEN" ->
+          new FreezeResult.AlreadyFrozen(UUID.fromString(reply.requireOrderId()));
+      case "NOT_FOUND" -> new FreezeResult.NotFound();
+      case "FORBIDDEN" -> new FreezeResult.NotTheOwner();
+      case "EXPIRED" -> new FreezeResult.Expired(Instant.ofEpochMilli(reply.requireExpiresAt()));
+      case "WRONG_STATE" -> new FreezeResult.WrongState(HoldStatus.valueOf(reply.holdStatus()));
+      default -> throw new IllegalStateException("freeze.lua answered " + reply.status());
+    };
   }
 
   @Override

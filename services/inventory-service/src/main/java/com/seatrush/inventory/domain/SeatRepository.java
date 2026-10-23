@@ -20,4 +20,15 @@ public interface SeatRepository {
 
   /** How many seats the event has, without loading any of them. */
   int countByEvent(UUID eventId);
+
+  /**
+   * What the named seats of an event cost, resolved from the section each one belongs to.
+   *
+   * <p>The checkout asks for the seats of one hold, so this is a handful of ids and not a venue.
+   * Prices are read here and never taken from the caller, because inventory is the only source of
+   * them (README section 6.4).
+   *
+   * @return one entry per seat that exists, which may be fewer than were asked for
+   */
+  List<SeatPrice> findPrices(UUID eventId, List<String> seatIds);
 }
