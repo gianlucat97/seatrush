@@ -1,1 +1,2 @@
 com.seatrush.messaging.config.MessagingAutoConfiguration
+com.seatrush.messaging.config.OutboxAutoConfiguration
