@@ -1,6 +1,16 @@
 package com.seatrush.testsupport.containers;
 
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Stream;
+import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.AdminClientConfig;
+import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.common.errors.TopicExistsException;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.testcontainers.kafka.KafkaContainer;
 
@@ -44,6 +54,38 @@ public final class KafkaSupport {
       throw new IllegalArgumentException("topic prefix must not be blank");
     }
     return prefix + "-" + TOPIC_SEQUENCE.incrementAndGet();
+  }
+
+  /**
+   * Creates topics on the shared broker, ignoring the ones that are already there.
+   *
+   * <p>Explicitly, because auto-creation is off on the broker in every environment that matters
+   * (README section 10.1): topics are made by an init job locally and by a Helm hook on Kubernetes.
+   * A test that let the first producer create its topic would also be testing a path production
+   * does not have, and would race the leader election that follows.
+   *
+   * <p>One partition each. A test asserting on order wants one, and a test that does not care is
+   * not made better by twelve.
+   */
+  public static void createTopics(String... names) {
+    if (names.length == 0) {
+      throw new IllegalArgumentException("name at least one topic to create");
+    }
+    List<NewTopic> topics = Stream.of(names).map(name -> new NewTopic(name, 1, (short) 1)).toList();
+    try (Admin admin =
+        Admin.create(Map.of(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers()))) {
+      admin.createTopics(topics).all().get(30, TimeUnit.SECONDS);
+    } catch (ExecutionException alreadyThereOrBroken) {
+      if (!(alreadyThereOrBroken.getCause() instanceof TopicExistsException)) {
+        throw new IllegalStateException(
+            "could not create " + String.join(", ", names), alreadyThereOrBroken);
+      }
+    } catch (TimeoutException e) {
+      throw new IllegalStateException("the broker did not create " + String.join(", ", names), e);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException("interrupted while creating topics", e);
+    }
   }
 
   /** Holds the container so that it starts on first access and only once, without locking. */

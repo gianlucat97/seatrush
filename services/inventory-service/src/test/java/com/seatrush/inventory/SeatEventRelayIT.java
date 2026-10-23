@@ -88,6 +88,10 @@ class SeatEventRelayIT {
     PostgresSupport.registerProperties(registry, DATABASE);
     RedisSupport.registerProperties(registry);
     KafkaSupport.registerProperties(registry);
+    // Explicitly, because auto-creation is off on the broker in every environment that matters
+    // (README section 10.1): a relay that created its own topic would be racing a leader election
+    // production never asks it to survive.
+    KafkaSupport.createTopics(Topics.INVENTORY_SEAT_EVENTS);
   }
 
   @BeforeEach
