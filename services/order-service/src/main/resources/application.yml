@@ -1,0 +1,73 @@
+# The defaults point at the Docker Compose stack of deploy/docker-compose and at an inventory
+# service on its own default port, so the service starts against make up with no configuration.
+# Every value is overridable by environment variable, which is how the container and the Helm
+# chart set them (README section 22).
+spring:
+  application:
+    name: order-service
+  threads:
+    # Virtual threads: every request of this service blocks on Postgres or on the freeze call to
+    # inventory, and the platform thread pool is exactly the limit README section 15 does not
+    # want (section 19).
+    virtual:
+      enabled: true
+  datasource:
+    url: ${POSTGRES_URL:jdbc:postgresql://localhost:5432/seatrush_order}
+    username: ${POSTGRES_USER:seatrush}
+    password: ${POSTGRES_PASSWORD:seatrush}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      # README section 10.3: nothing is published unless every in-sync replica has it, and a
+      # retried send cannot become a second message.
+      acks: all
+      properties:
+        enable.idempotence: true
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+  flyway:
+    # The service owns the schema of its own database and migrates it on startup.
+    enabled: true
+    locations: classpath:db/migration
+  jackson:
+    datatype:
+      datetime:
+        # Instants as ISO-8601 strings, the format README section 12 publishes. Set
+        # explicitly because it is part of the contract, not because Jackson 3 would
+        # default the other way.
+        write-dates-as-timestamps: false
+
+seatrush:
+  checkout:
+    # The deadline of README section 8.3, and only before the pivot. Two minutes is long enough
+    # for a payment provider having a slow minute and short enough that a user is not left
+    # watching a spinner over seats somebody else could be buying.
+    timeout: ${SEATRUSH_CHECKOUT_TIMEOUT:2m}
+  inventory:
+    # Inside the cluster this is a service name; locally it is the port inventory listens on.
+    base-url: ${SEATRUSH_INVENTORY_BASE_URL:http://localhost:8081}
+    connect-timeout: ${SEATRUSH_INVENTORY_CONNECT_TIMEOUT:1s}
+    # Shorter than the checkout deadline on purpose: a freeze that hangs has to give the user an
+    # error they can retry while their hold is still alive.
+    read-timeout: ${SEATRUSH_INVENTORY_READ_TIMEOUT:3s}
+  outbox:
+    # The Postgres outbox of README section 9.5, which seatrush-messaging contributes to every
+    # service that owns a database. Both values are the defaults of README section 22 and are
+    # repeated here only so a deployment can override them by environment variable.
+    poll-interval: ${SEATRUSH_OUTBOX_POLL_INTERVAL:100ms}
+    batch-size: ${SEATRUSH_OUTBOX_BATCH_SIZE:500}
+
+server:
+  port: ${SERVER_PORT:8082}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # Health for the container probe, info for the build it is running. The Prometheus
+        # endpoint arrives with the observability module.
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
