@@ -700,7 +700,8 @@ CREATE TABLE payment_operation (
     order_id     UUID NOT NULL,
     operation    TEXT NOT NULL,            -- AUTHORIZE, CAPTURE, VOID
     result       TEXT NOT NULL,            -- SUCCEEDED, DECLINED, NOOP
-    amount_cents BIGINT NOT NULL,
+    amount_cents BIGINT,                   -- the amount of the authorization this belongs to
+    currency     CHAR(3),                  -- always together with the amount, never without it
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (order_id, operation)
 );
