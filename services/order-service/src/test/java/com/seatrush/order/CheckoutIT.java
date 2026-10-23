@@ -109,6 +109,9 @@ class CheckoutIT {
     PostgresSupport.createDatabase(DATABASE);
     PostgresSupport.registerProperties(registry, DATABASE);
     KafkaSupport.registerProperties(registry);
+    // Explicitly, for the reason of README section 10.1: auto-creation is off on the broker, so a
+    // test that let the relay create its topic would be exercising a path production has not got.
+    KafkaSupport.createTopics(Topics.PAYMENT_COMMANDS);
     registry.add("seatrush.inventory.base-url", () -> inventory.baseUrl());
   }
 

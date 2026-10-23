@@ -80,6 +80,15 @@
       <artifactId>spring-boot-starter-test</artifactId>
       <scope>test</scope>
     </dependency>
+    <!-- The Kafka auto-configuration a service brings with its starter. The main code names it
+         only as a string, so that a service without a broker does not inherit it; the consumer
+         test needs the real class, because the listener container it asserts on is what that
+         auto-configuration builds. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-kafka</artifactId>
+      <scope>test</scope>
+    </dependency>
     <!-- The validation provider every service brings with spring-boot-starter-validation.
          OutboxProperties is @Validated like the properties of a service, so the test classpath
          has to be a service's classpath: without a provider the binding fails at startup, and

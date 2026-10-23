@@ -1076,6 +1076,9 @@ Main properties (all overridable via environment variables):
 | `seatrush.inventory.read-timeout` | order | `3s` | Read timeout of the freeze call, kept below the checkout deadline |
 | `seatrush.outbox.poll-interval` | all | `100ms` | Postgres outbox relay period |
 | `seatrush.outbox.batch-size` | all | `500` | Rows per relay batch |
+| `seatrush.consumer.retries` | all | `3` | Redeliveries of a record before the DLQ |
+| `seatrush.consumer.retry-backoff` | all | `500ms` | Pause before the first redelivery |
+| `seatrush.consumer.retry-max-backoff` | all | `5s` | Ceiling the redelivery pause doubles up to |
 | `seatrush.stream-relay.poll-interval` | inventory | `100ms` | Seat event relay period |
 | `seatrush.stream-relay.batch-size` | inventory | `500` | Stream entries per relay pass |
 | `seatrush.stream-relay.claim-idle-after` | inventory | `30s` | Pending entries are claimed from a dead consumer after this |
