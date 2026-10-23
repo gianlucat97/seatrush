@@ -1071,6 +1071,9 @@ Main properties (all overridable via environment variables):
 | `seatrush.checkout.timeout` | order | `2m` | SAGA deadline before the pivot |
 | `seatrush.checkout.capture-max-retries` | order | `10` | Capture retries after the pivot |
 | `seatrush.checkout.capture-backoff` | order | `1s..60s` | Exponential backoff bounds |
+| `seatrush.inventory.base-url` | order | `http://localhost:8081` | Inventory internal API, called by the synchronous freeze |
+| `seatrush.inventory.connect-timeout` | order | `1s` | Connect timeout of the freeze call |
+| `seatrush.inventory.read-timeout` | order | `3s` | Read timeout of the freeze call, kept below the checkout deadline |
 | `seatrush.outbox.poll-interval` | all | `100ms` | Postgres outbox relay period |
 | `seatrush.outbox.batch-size` | all | `500` | Rows per relay batch |
 | `seatrush.stream-relay.poll-interval` | inventory | `100ms` | Seat event relay period |
