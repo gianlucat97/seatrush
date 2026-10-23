@@ -1,0 +1,77 @@
+# The defaults point at the Docker Compose stack of deploy/docker-compose, so the service starts
+# against make up with no configuration. Every value is overridable by environment variable, which
+# is how the container and the Helm chart set them (README section 22).
+spring:
+  application:
+    name: payment-service
+  threads:
+    # Virtual threads, and here they are the whole design: every command parks for as long as the
+    # simulated provider takes, and a platform thread pool would cap the number of payments in
+    # flight at the size of the pool rather than at what the service can really hold.
+    virtual:
+      enabled: true
+  datasource:
+    url: ${POSTGRES_URL:jdbc:postgresql://localhost:5432/seatrush_payment}
+    username: ${POSTGRES_USER:seatrush}
+    password: ${POSTGRES_PASSWORD:seatrush}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      # README section 10.3: nothing is published unless every in-sync replica has it, and a
+      # retried send cannot become a second message.
+      acks: all
+      properties:
+        enable.idempotence: true
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    consumer:
+      # One group for the whole deployment: a command is performed by exactly one pod. That is the
+      # opposite of the broadcast pattern realtime uses for seat events.
+      group-id: ${KAFKA_GROUP_ID:payment-service}
+      # Commands that arrived while every pod was down are still commands.
+      auto-offset-reset: earliest
+      # The container commits the offset itself, after the handler has returned.
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+  flyway:
+    # The service owns the schema of its own database and migrates it on startup.
+    enabled: true
+    locations: classpath:db/migration
+  jackson:
+    datatype:
+      datetime:
+        # Instants as ISO-8601 strings, the format README section 12 publishes.
+        write-dates-as-timestamps: false
+
+seatrush:
+  payment:
+    # The starting point of the simulator (README section 22). The internal endpoint of section
+    # 12.7 owns these from the first call onwards, which is how a benchmark drives compensations.
+    decline-rate: ${SEATRUSH_PAYMENT_DECLINE_RATE:0.05}
+    latency-p50: ${SEATRUSH_PAYMENT_LATENCY_P50:300ms}
+    latency-p99: ${SEATRUSH_PAYMENT_LATENCY_P99:1500ms}
+  consumer:
+    # Bounded retries and then the dead letter topic (README sections 10.3 and 16).
+    retries: ${SEATRUSH_CONSUMER_RETRIES:3}
+    retry-backoff: ${SEATRUSH_CONSUMER_RETRY_BACKOFF:500ms}
+    retry-max-backoff: ${SEATRUSH_CONSUMER_RETRY_MAX_BACKOFF:5s}
+  outbox:
+    # The Postgres outbox of README section 9.5, which seatrush-messaging contributes to every
+    # service that owns a database.
+    poll-interval: ${SEATRUSH_OUTBOX_POLL_INTERVAL:100ms}
+    batch-size: ${SEATRUSH_OUTBOX_BATCH_SIZE:500}
+
+server:
+  port: ${SERVER_PORT:8083}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # Health for the container probe, info for the build it is running.
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true

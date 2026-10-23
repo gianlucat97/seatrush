@@ -3,7 +3,6 @@ package com.seatrush.messaging.config;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.seatrush.common.config.CommonAutoConfiguration;
-import com.seatrush.messaging.DirectTransactionManager;
 import com.seatrush.messaging.consumer.IdempotentConsumer;
 import com.seatrush.messaging.consumer.JdbcProcessedMessages;
 import com.seatrush.messaging.consumer.ProcessedMessages;
@@ -14,6 +13,7 @@ import com.seatrush.messaging.outbox.Outbox;
 import com.seatrush.messaging.outbox.OutboxEntry;
 import com.seatrush.messaging.outbox.OutboxRelay;
 import com.seatrush.messaging.outbox.OutboxStore;
+import com.seatrush.testsupport.transaction.DirectTransactionManager;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;

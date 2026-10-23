@@ -4,13 +4,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.seatrush.common.id.UuidV7Generator;
-import com.seatrush.messaging.DirectTransactionManager;
 import com.seatrush.messaging.MessageCodec;
 import com.seatrush.messaging.MessageFactory;
 import com.seatrush.messaging.config.OutboxProperties;
 import com.seatrush.messaging.messages.CapturePayment;
 import com.seatrush.messaging.messages.SampleMessages;
 import com.seatrush.testsupport.time.MutableClock;
+import com.seatrush.testsupport.transaction.DirectTransactionManager;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;

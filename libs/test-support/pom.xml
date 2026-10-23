@@ -41,6 +41,11 @@
       <groupId>org.springframework</groupId>
       <artifactId>spring-test</artifactId>
     </dependency>
+    <!-- AbstractPlatformTransactionManager, which DirectTransactionManager extends. -->
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-tx</artifactId>
+    </dependency>
     <!-- AdminClient, so a test can create its topics the way the init job of README section 10.1
          does. Compile scope like the rest of this module: it is all test code, and consumers
          declare the whole module in test scope. -->
