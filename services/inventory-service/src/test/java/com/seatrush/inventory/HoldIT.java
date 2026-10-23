@@ -38,6 +38,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.TestPropertySource;
 import org.testcontainers.junit.jupiter.EnabledIfDockerAvailable;
 
 /**
@@ -49,6 +50,13 @@ import org.testcontainers.junit.jupiter.EnabledIfDockerAvailable;
  * in milliseconds.
  */
 @SpringBootTest
+@TestPropertySource(
+    properties = {
+      // The sweeper is driven by hand here, so the scheduled one is pushed out of the way: a
+      // sweep firing between moving the clock and asserting would make the result a race.
+      "seatrush.hold.sweeper-interval=1h",
+      "seatrush.stream-relay.poll-interval=1h"
+    })
 @EnabledIfDockerAvailable
 class HoldIT {
 

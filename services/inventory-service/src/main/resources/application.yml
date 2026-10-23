@@ -13,6 +13,16 @@ spring:
     url: ${POSTGRES_URL:jdbc:postgresql://localhost:5432/seatrush_inventory}
     username: ${POSTGRES_USER:seatrush}
     password: ${POSTGRES_PASSWORD:seatrush}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      # README section 10.3: nothing is published unless every in-sync replica has it, and a
+      # retried send cannot become a second message.
+      acks: all
+      properties:
+        enable.idempotence: true
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
   data:
     redis:
       # The seat state of a live sale (README section 9.2).
@@ -43,6 +53,14 @@ seatrush:
     # abandoned hold are back almost immediately.
     sweeper-interval: ${SEATRUSH_HOLD_SWEEPER_INTERVAL:1s}
     sweeper-batch-size: ${SEATRUSH_HOLD_SWEEPER_BATCH_SIZE:500}
+  stream-relay:
+    # The seat map of every client is at most this far behind the seat state in Redis, so it is
+    # tens of milliseconds. A blocking XREADGROUP is not used because the streams are per event
+    # and the set of open sales changes while the service runs.
+    poll-interval: ${SEATRUSH_STREAM_RELAY_POLL_INTERVAL:100ms}
+    batch-size: ${SEATRUSH_STREAM_RELAY_BATCH_SIZE:500}
+    # Long enough that a slow publish is not stolen from a relay still working on it.
+    claim-idle-after: ${SEATRUSH_STREAM_RELAY_CLAIM_IDLE_AFTER:30s}
 
 server:
   port: ${SERVER_PORT:8081}

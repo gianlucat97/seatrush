@@ -85,6 +85,30 @@ class MessageFactoryTest {
   }
 
   @Test
+  void anEnvelopeForARelayKeepsTheTimeTheChangeHappened() {
+    Instant whenItHappened = ON_SALE.minus(Duration.ofSeconds(30));
+    clock.advanceBy(Duration.ofMinutes(2));
+
+    MessageEnvelope<SeatsHeld> envelope =
+        factory.wrapAt(SampleMessages.seatsHeld(), whenItHappened);
+
+    assertThat(envelope.occurredAt())
+        .as("the relay publishes it now, but it happened then")
+        .isEqualTo(whenItHappened);
+    assertThat(envelope.messageId()).isNotNull();
+    assertThat(envelope.correlationId()).isEqualTo(SampleMessages.EVENT_ID);
+  }
+
+  @Test
+  void refusesToStampAnEnvelopeWithoutATime() {
+    assertThatThrownBy(() -> factory.wrapAt(SampleMessages.seatsHeld(), null))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessageContaining("occurredAt");
+    assertThatThrownBy(() -> factory.wrapAt(null, ON_SALE))
+        .isInstanceOf(NullPointerException.class);
+  }
+
+  @Test
   void leavesTheTraceContextToTheTracingBridge() {
     assertThat(factory.wrap(SampleMessages.commitSeats()).trace()).isEmpty();
   }
