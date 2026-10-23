@@ -35,6 +35,8 @@ public class HoldScripts {
       RedisScript.of(new ClassPathResource("redis/release.lua"), String.class);
   private final RedisScript<String> expire =
       RedisScript.of(new ClassPathResource("redis/expire.lua"), String.class);
+  private final RedisScript<String> freeze =
+      RedisScript.of(new ClassPathResource("redis/freeze.lua"), String.class);
 
   private final StringRedisTemplate redis;
 
@@ -54,11 +56,15 @@ public class HoldScripts {
     return expire;
   }
 
-  /** Compiles the three scripts on the server, failing the startup if one of them is broken. */
+  public RedisScript<String> freeze() {
+    return freeze;
+  }
+
+  /** Compiles every script on the server, failing the startup if one of them is broken. */
   @EventListener(ApplicationReadyEvent.class)
   public void loadScripts() {
     try {
-      for (RedisScript<String> script : List.of(hold, release, expire)) {
+      for (RedisScript<String> script : List.of(hold, release, expire, freeze)) {
         String digest =
             redis.execute(
                 (RedisCallback<String>)
@@ -69,7 +75,7 @@ public class HoldScripts {
                                 script.getScriptAsString().getBytes(StandardCharsets.UTF_8)));
         log.debug("loaded a hold path script as {}", digest);
       }
-      log.info("the three scripts of the hold path are compiled on Redis");
+      log.info("the four scripts of the hold path are compiled on Redis");
     } catch (RedisConnectionFailureException notUpYet) {
       log.warn("Redis is not reachable, the hold path scripts will be sent on first use", notUpYet);
     }

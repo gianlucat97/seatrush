@@ -11,9 +11,9 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * The inventory service: events, venue layout, seat state, holds and the record of sales (README
  * section 6.3).
  *
- * <p>What is here today is the catalog, the layout generator, the seat state of a live sale and the
- * hold path. The seat commit, the stream relay and the reconciler arrive with the features that
- * follow.
+ * <p>What is here today is the catalog, the layout generator, the seat state of a live sale, the
+ * hold path up to the freeze that hands a hold to a checkout, and the relay that forwards seat
+ * changes to Kafka. The seat commit and the reconciler arrive with the features that follow.
  */
 @SpringBootApplication
 @ConfigurationPropertiesScan

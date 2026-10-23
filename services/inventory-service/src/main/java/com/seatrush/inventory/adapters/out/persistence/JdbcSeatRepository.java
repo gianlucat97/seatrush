@@ -1,6 +1,8 @@
 package com.seatrush.inventory.adapters.out.persistence;
 
+import com.seatrush.common.money.Money;
 import com.seatrush.inventory.domain.Seat;
+import com.seatrush.inventory.domain.SeatPrice;
 import com.seatrush.inventory.domain.SeatRepository;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -80,6 +82,35 @@ public class JdbcSeatRepository implements SeatRepository {
         .single();
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>One join and one round trip, because the caller is a checkout waiting on this answer: the
+   * seats of a hold are at most a handful, and asking per seat would put the latency of the hold
+   * limit into every order. A seat the event does not have simply does not come back, which is what
+   * lets the caller tell a stale hold apart from a priced one.
+   */
+  @Override
+  public List<SeatPrice> findPrices(UUID eventId, List<String> seatIds) {
+    if (seatIds.isEmpty()) {
+      return List.of();
+    }
+    return jdbc.sql(
+            """
+            SELECT seat.id, seat.section_id, section.price_cents, section.currency
+            FROM seat
+            JOIN section ON section.event_id = seat.event_id
+                        AND section.id = seat.section_id
+            WHERE seat.event_id = :eventId
+              AND seat.id IN (:seatIds)
+            ORDER BY seat.id
+            """)
+        .param("eventId", eventId)
+        .param("seatIds", seatIds)
+        .query(JdbcSeatRepository::readSeatPrice)
+        .list();
+  }
+
   private static SqlParameterSource seatParameters(Seat seat) {
     return new MapSqlParameterSource()
         .addValue("eventId", seat.eventId())
@@ -89,6 +120,13 @@ public class JdbcSeatRepository implements SeatRepository {
         .addValue("number", seat.number())
         .addValue("x", seat.x())
         .addValue("y", seat.y());
+  }
+
+  private static SeatPrice readSeatPrice(ResultSet row, int rowNumber) throws SQLException {
+    return new SeatPrice(
+        row.getString("id"),
+        row.getString("section_id"),
+        Money.of(row.getLong("price_cents"), row.getString("currency")));
   }
 
   private static Seat readSeat(ResultSet row, int rowNumber) throws SQLException {

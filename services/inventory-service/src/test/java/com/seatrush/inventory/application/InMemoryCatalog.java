@@ -4,6 +4,7 @@ import com.seatrush.inventory.domain.Event;
 import com.seatrush.inventory.domain.EventRepository;
 import com.seatrush.inventory.domain.EventStatus;
 import com.seatrush.inventory.domain.Seat;
+import com.seatrush.inventory.domain.SeatPrice;
 import com.seatrush.inventory.domain.SeatRepository;
 import com.seatrush.inventory.domain.SeatSaleRepository;
 import com.seatrush.inventory.domain.Section;
@@ -17,6 +18,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * The two repository ports in memory, for the use case tests.
@@ -92,6 +94,25 @@ final class InMemoryCatalog implements EventRepository, SeatRepository, SeatSale
   @Override
   public int countByEvent(UUID eventId) {
     return seats.getOrDefault(eventId, List.of()).size();
+  }
+
+  /**
+   * The prices of the named seats, resolved through the section of each one.
+   *
+   * <p>A seat the event does not have is left out rather than priced at zero, which is the same
+   * thing the join in Postgres does and the case the caller has to handle.
+   */
+  @Override
+  public List<SeatPrice> findPrices(UUID eventId, List<String> seatIds) {
+    Map<String, Section> priced =
+        findSections(eventId).stream().collect(Collectors.toMap(Section::id, section -> section));
+    return findByEvent(eventId).stream()
+        .filter(seat -> seatIds.contains(seat.id()))
+        .filter(seat -> priced.containsKey(seat.sectionId()))
+        .map(
+            seat ->
+                new SeatPrice(seat.id(), seat.sectionId(), priced.get(seat.sectionId()).price()))
+        .toList();
   }
 
   @Override
