@@ -12,7 +12,7 @@
   <artifactId>seatrush-messaging</artifactId>
 
   <name>SeatRush Messaging</name>
-  <description>The message envelope, the message catalog and their JSON encoding, shared by every producer and consumer</description>
+  <description>The message envelope and catalog, their JSON encoding, the Postgres outbox and the idempotent consumer, shared by every producer and consumer</description>
 
   <dependencies>
     <!-- Money and the id generator the envelope stamps every message with. -->
@@ -32,16 +32,80 @@
       <artifactId>spring-boot-autoconfigure</artifactId>
     </dependency>
 
+    <!-- The relay and the publisher report what they could not get to the broker. API only:
+         the service on the classpath decides the backend. -->
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+    </dependency>
+
+    <!-- Everything below is optional: it belongs to the outbox half of this module, and the
+         services that only produce or consume messages (realtime, queue, gateway) have no
+         database and must not inherit a JDBC or a Kafka client by depending on the envelope.
+         The auto-configuration is conditional on the same classes, so a service gets the
+         outbox exactly when it brings its own starters. -->
+    <!-- JdbcClient, the outbox table and the processed_message table. -->
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-jdbc</artifactId>
+      <optional>true</optional>
+    </dependency>
+    <!-- TransactionTemplate and the check that an append really is joining a transaction. -->
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-tx</artifactId>
+      <optional>true</optional>
+    </dependency>
+    <!-- The producer the relay publishes with. -->
+    <dependency>
+      <groupId>org.springframework.kafka</groupId>
+      <artifactId>spring-kafka</artifactId>
+      <optional>true</optional>
+    </dependency>
+    <!-- The outbox lag gauge of README section 14.1. -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-core</artifactId>
+      <optional>true</optional>
+    </dependency>
+    <!-- The bounds on the relay properties. -->
+    <dependency>
+      <groupId>jakarta.validation</groupId>
+      <artifactId>jakarta.validation-api</artifactId>
+      <optional>true</optional>
+    </dependency>
+
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>
       <scope>test</scope>
     </dependency>
-    <!-- MutableClock, so the envelope timestamps are asserted instead of waited for. -->
+    <!-- The validation provider every service brings with spring-boot-starter-validation.
+         OutboxProperties is @Validated like the properties of a service, so the test classpath
+         has to be a service's classpath: without a provider the binding fails at startup, and
+         that is a failure these tests must see here rather than in a service. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-validation</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- MutableClock and the shared Postgres and Kafka containers of the outbox tests. -->
     <dependency>
       <groupId>com.seatrush</groupId>
       <artifactId>seatrush-test-support</artifactId>
       <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <!-- The pool the outbox integration tests claim rows through: the concurrency test runs
+         many relays at once, which is the one thing a connection per call cannot show. -->
+    <dependency>
+      <groupId>com.zaxxer</groupId>
+      <artifactId>HikariCP</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
       <scope>test</scope>
     </dependency>
   </dependencies>
@@ -51,6 +115,12 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
+      </plugin>
+      <!-- The outbox is the first thing in this module that needs a real Postgres and a real
+           broker, so its tests are *IT and Failsafe runs them. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
       </plugin>
       <plugin>
         <groupId>org.jacoco</groupId>

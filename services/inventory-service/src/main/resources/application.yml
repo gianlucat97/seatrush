@@ -53,6 +53,12 @@ seatrush:
     # abandoned hold are back almost immediately.
     sweeper-interval: ${SEATRUSH_HOLD_SWEEPER_INTERVAL:1s}
     sweeper-batch-size: ${SEATRUSH_HOLD_SWEEPER_BATCH_SIZE:500}
+  outbox:
+    # The Postgres outbox of README section 9.5, which seatrush-messaging contributes to every
+    # service that owns a database. Both values are the defaults of README section 22 and are
+    # repeated here only so a deployment can override them by environment variable.
+    poll-interval: ${SEATRUSH_OUTBOX_POLL_INTERVAL:100ms}
+    batch-size: ${SEATRUSH_OUTBOX_BATCH_SIZE:500}
   stream-relay:
     # The seat map of every client is at most this far behind the seat state in Redis, so it is
     # tens of milliseconds. A blocking XREADGROUP is not used because the streams are per event
