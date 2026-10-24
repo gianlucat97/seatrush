@@ -164,7 +164,13 @@ class InternalHoldControllerTest {
   private static FrozenHold frozenHold() {
     Hold hold =
         new Hold(
-            HOLD_ID, EVENT_ID, USER_ID, List.of("A-1-1", "A-1-2"), EXPIRES_AT, HoldStatus.CHECKOUT);
+            HOLD_ID,
+            EVENT_ID,
+            USER_ID,
+            List.of("A-1-1", "A-1-2"),
+            EXPIRES_AT,
+            HoldStatus.CHECKOUT,
+            ORDER_ID);
     return new FrozenHold(
         hold,
         ORDER_ID,

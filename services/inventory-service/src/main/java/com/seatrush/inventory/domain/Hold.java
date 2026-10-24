@@ -3,6 +3,7 @@ package com.seatrush.inventory.domain;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -14,6 +15,8 @@ import java.util.UUID;
  * state the rebuild procedure of README section 16 is allowed to drop.
  *
  * @param expiresAt when the sweeper may take the seats back, unless the hold is frozen first
+ * @param orderId the order that froze this hold, absent while no order has. It survives a release,
+ *     so a hold a compensation gave back still says which checkout had taken it
  */
 public record Hold(
     UUID id,
@@ -21,7 +24,8 @@ public record Hold(
     UUID userId,
     List<String> seatIds,
     Instant expiresAt,
-    HoldStatus status) {
+    HoldStatus status,
+    UUID orderId) {
 
   public Hold {
     Objects.requireNonNull(id, "id must not be null");
@@ -33,6 +37,27 @@ public record Hold(
     if (seatIds.isEmpty()) {
       throw new IllegalArgumentException("a hold must hold at least one seat");
     }
+    if (orderId == null && (status == HoldStatus.CHECKOUT || status == HoldStatus.CONSUMED)) {
+      // A hold in either status belongs to an order by definition, and the commit procedure of
+      // README section 9.6 checks which one before it sells anything.
+      throw new IllegalArgumentException(
+          "a %s hold belongs to an order, hold %s".formatted(status, id));
+    }
+  }
+
+  /** The order that froze this hold, absent while none has. */
+  public Optional<UUID> order() {
+    return Optional.ofNullable(orderId);
+  }
+
+  /** Whether this hold was frozen for {@code orderId}, which is what a commit has to know. */
+  public boolean isFrozenFor(UUID orderId) {
+    return status == HoldStatus.CHECKOUT && orderId.equals(this.orderId);
+  }
+
+  /** Whether this hold was already sold to {@code orderId}, which makes a commit a redelivery. */
+  public boolean isSoldTo(UUID orderId) {
+    return status == HoldStatus.CONSUMED && orderId.equals(this.orderId);
   }
 
   /** How many seats this hold took. */

@@ -201,7 +201,8 @@ class HoldFreezeServiceTest {
 
   private Hold anActiveHold(UUID eventId, String... seatIds) {
     Hold hold =
-        new Hold(ids.newId(), eventId, USER_ID, List.of(seatIds), EXPIRES_AT, HoldStatus.ACTIVE);
+        new Hold(
+            ids.newId(), eventId, USER_ID, List.of(seatIds), EXPIRES_AT, HoldStatus.ACTIVE, null);
     holds.store(hold);
     return hold;
   }

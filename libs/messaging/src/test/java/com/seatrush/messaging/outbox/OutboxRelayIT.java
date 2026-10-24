@@ -231,7 +231,11 @@ class OutboxRelayIT {
     append();
 
     SimpleMeterRegistry meters = new SimpleMeterRegistry();
-    relay(meters).relayOnce();
+    // Held in a local on purpose: a Micrometer gauge keeps only a weak reference to what it
+    // observes, so a relay left unreferenced can be collected before the gauge is read and the
+    // value comes back as NaN. In the service the relay is a singleton bean and stays reachable.
+    OutboxRelay relay = relay(meters);
+    relay.relayOnce();
 
     assertThat(meters.get("seatrush.outbox.lag.seconds").tag("store", "postgres").gauge().value())
         .isGreaterThanOrEqualTo(0.0)

@@ -44,6 +44,18 @@ public final class SeatKeys {
     return "holds:" + tag(eventId) + ":expiry";
   }
 
+  /**
+   * ZSET: the frozen holds of an event, scored by the instant each one was frozen.
+   *
+   * <p>The counterpart of {@link #holdExpiry(UUID)} for the holds a checkout has taken over.
+   * Freezing moves a hold from that set to this one, and committing or releasing it takes it out
+   * again, so the set is exactly the holds a SAGA currently owns. That is what makes the reconciler
+   * of README section 9.6 cheap: it has a list to walk rather than a seat map to scan.
+   */
+  public static String holdCheckout(UUID eventId) {
+    return "holds:" + tag(eventId) + ":checkout";
+  }
+
   /** STRING: the active hold of one user for one event, which is how invariant I8 is enforced. */
   public static String userHold(UUID eventId, UUID userId) {
     return "userhold:" + tag(eventId) + ":" + userId;

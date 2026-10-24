@@ -129,7 +129,9 @@ class OutboxRelayTest {
     clock.advanceBy(Duration.ofMillis(1500));
     publisher.acceptAtMost(0);
 
-    relayWith(500).relayOnce();
+    // Held in a local, because the gauge observes the relay through a weak reference.
+    OutboxRelay relay = relayWith(500);
+    relay.relayOnce();
 
     assertThat(lagGauge()).isEqualTo(1.5);
   }
@@ -158,7 +160,8 @@ class OutboxRelayTest {
     clock.setTo(now);
     publisher.acceptAtMost(0);
 
-    relayWith(500).relayOnce();
+    OutboxRelay relay = relayWith(500);
+    relay.relayOnce();
 
     assertThat(lagGauge()).isEqualTo(4.0);
   }

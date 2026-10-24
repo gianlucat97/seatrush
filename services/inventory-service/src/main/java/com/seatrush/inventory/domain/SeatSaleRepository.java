@@ -1,5 +1,6 @@
 package com.seatrush.inventory.domain;
 
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
@@ -17,4 +18,18 @@ public interface SeatSaleRepository {
 
   /** How many seats of an event are sold, without loading their ids. */
   int countSoldSeats(UUID eventId);
+
+  /**
+   * Records the sale of the seats of one order; the caller owns the transaction.
+   *
+   * <p>This is the guard of invariant I1 (README section 9.1). The primary key of the table is what
+   * makes a second sale of one seat impossible, whatever Redis believed at the time, which is why
+   * the whole commit procedure is built around this one statement failing.
+   *
+   * @throws SeatAlreadySoldException if any of the seats is already sold
+   */
+  void insertSales(UUID eventId, UUID orderId, List<String> seatIds);
+
+  /** The seats one order bought, which is how a commit recognises its own earlier attempt. */
+  List<String> findSeatIdsOfOrder(UUID eventId, UUID orderId);
 }

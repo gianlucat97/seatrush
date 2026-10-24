@@ -18,6 +18,7 @@ class HoldTest {
   private static final UUID HOLD_ID = UUID.fromString("0199c5f0-4444-7000-8000-00000000d004");
   private static final UUID EVENT_ID = UUID.fromString("0199c5f0-2222-7000-8000-00000000b002");
   private static final UUID USER_ID = UUID.fromString("0199c5f0-3333-7000-8000-00000000c003");
+  private static final UUID ORDER_ID = UUID.fromString("0199c5f0-1111-7000-8000-00000000a001");
   private static final Instant EXPIRES_AT = Instant.parse("2026-06-01T10:05:00Z");
 
   @Nested
@@ -36,7 +37,9 @@ class HoldTest {
     @Test
     void refusesToHoldNothing() {
       assertThatThrownBy(
-              () -> new Hold(HOLD_ID, EVENT_ID, USER_ID, List.of(), EXPIRES_AT, HoldStatus.ACTIVE))
+              () ->
+                  new Hold(
+                      HOLD_ID, EVENT_ID, USER_ID, List.of(), EXPIRES_AT, HoldStatus.ACTIVE, null))
           .isInstanceOf(IllegalArgumentException.class)
           .hasMessageContaining("at least one seat");
     }
@@ -44,13 +47,21 @@ class HoldTest {
     @Test
     void refusesToBeBuiltWithoutWhatItNeeds() {
       assertThatThrownBy(
-              () -> new Hold(HOLD_ID, EVENT_ID, USER_ID, List.of("A-1-1"), null, HoldStatus.ACTIVE))
+              () ->
+                  new Hold(
+                      HOLD_ID, EVENT_ID, USER_ID, List.of("A-1-1"), null, HoldStatus.ACTIVE, null))
           .isInstanceOf(NullPointerException.class)
           .hasMessageContaining("expiresAt");
       assertThatThrownBy(
               () ->
                   new Hold(
-                      HOLD_ID, EVENT_ID, null, List.of("A-1-1"), EXPIRES_AT, HoldStatus.ACTIVE))
+                      HOLD_ID,
+                      EVENT_ID,
+                      null,
+                      List.of("A-1-1"),
+                      EXPIRES_AT,
+                      HoldStatus.ACTIVE,
+                      null))
           .isInstanceOf(NullPointerException.class)
           .hasMessageContaining("userId");
     }
@@ -164,7 +175,80 @@ class HoldTest {
     }
   }
 
+  @Nested
+  @DisplayName("the order it belongs to")
+  class TheOrder {
+
+    @Test
+    void isAbsentWhileNoCheckoutHasTakenIt() {
+      assertThat(hold(HoldStatus.ACTIVE).order()).isEmpty();
+    }
+
+    @Test
+    void isTheOrderThatFrozeIt() {
+      assertThat(hold(HoldStatus.CHECKOUT).order()).contains(ORDER_ID);
+      assertThat(hold(HoldStatus.CONSUMED).order()).contains(ORDER_ID);
+    }
+
+    /**
+     * A hold in either status belongs to an order by definition, and the commit procedure of README
+     * section 9.6 checks which one before it sells anything.
+     */
+    @ParameterizedTest
+    @EnumSource(
+        value = HoldStatus.class,
+        names = {"CHECKOUT", "CONSUMED"})
+    void isRequiredByTheTwoStatusesThatHaveOne(HoldStatus status) {
+      assertThatThrownBy(
+              () ->
+                  new Hold(HOLD_ID, EVENT_ID, USER_ID, List.of("A-1-1"), EXPIRES_AT, status, null))
+          .isInstanceOf(IllegalArgumentException.class)
+          .hasMessageContaining("belongs to an order");
+    }
+
+    /**
+     * It survives a release, so a hold a compensation gave back still says which checkout had it.
+     */
+    @Test
+    void survivesARelease() {
+      Hold released =
+          new Hold(
+              HOLD_ID,
+              EVENT_ID,
+              USER_ID,
+              List.of("A-1-1"),
+              EXPIRES_AT,
+              HoldStatus.RELEASED,
+              ORDER_ID);
+
+      assertThat(released.order()).contains(ORDER_ID);
+    }
+
+    @Test
+    void knowsWhetherItIsFrozenForAnOrder() {
+      assertThat(hold(HoldStatus.CHECKOUT).isFrozenFor(ORDER_ID)).isTrue();
+      assertThat(hold(HoldStatus.CHECKOUT).isFrozenFor(UUID.randomUUID())).isFalse();
+      assertThat(hold(HoldStatus.ACTIVE).isFrozenFor(ORDER_ID))
+          .as("a hold nobody froze is nobody's to commit")
+          .isFalse();
+      assertThat(hold(HoldStatus.CONSUMED).isFrozenFor(ORDER_ID))
+          .as("and one already sold is past being frozen")
+          .isFalse();
+    }
+
+    @Test
+    void knowsWhetherItWasAlreadySoldToAnOrder() {
+      assertThat(hold(HoldStatus.CONSUMED).isSoldTo(ORDER_ID)).isTrue();
+      assertThat(hold(HoldStatus.CONSUMED).isSoldTo(UUID.randomUUID())).isFalse();
+      assertThat(hold(HoldStatus.CHECKOUT).isSoldTo(ORDER_ID)).isFalse();
+      assertThat(hold(HoldStatus.ACTIVE).isSoldTo(ORDER_ID)).isFalse();
+    }
+  }
+
   private static Hold hold(HoldStatus status) {
-    return new Hold(HOLD_ID, EVENT_ID, USER_ID, List.of("A-1-1", "A-1-2"), EXPIRES_AT, status);
+    // A checkout and a consumed hold belong to an order; the others belong to none.
+    UUID orderId = status == HoldStatus.CHECKOUT || status == HoldStatus.CONSUMED ? ORDER_ID : null;
+    return new Hold(
+        HOLD_ID, EVENT_ID, USER_ID, List.of("A-1-1", "A-1-2"), EXPIRES_AT, status, orderId);
   }
 }
