@@ -45,4 +45,14 @@ final class RecordingOutboxStore implements OutboxStore {
   List<OutboxEntry> appended() {
     return List.copyOf(appended);
   }
+
+  /**
+   * Forgets what was appended so far.
+   *
+   * <p>So a test of one step can assert on what that step sent, rather than on everything the steps
+   * before it sent as well.
+   */
+  void forget() {
+    appended.clear();
+  }
 }
