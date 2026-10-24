@@ -55,7 +55,31 @@ public interface SeatHoldStore {
    */
   FreezeResult freeze(Hold hold, UUID orderId, Optional<UUID> callerId, Instant now);
 
+  /**
+   * Makes the seat map agree that the seats of a hold are sold (README section 9.6, step 4).
+   *
+   * <p>Called only after the sale is a fact in Postgres. The order is not negotiable: the primary
+   * key of {@code seat_sale} is what makes overselling impossible, and a seat map that said sold
+   * before the row existed would be a promise the books had not made. A pod that dies before this
+   * runs leaves the seats held, which nobody else can take, and the reconciler finishes the job.
+   *
+   * <p>Idempotent for the same {@code orderId}, because both a redelivered command and the
+   * reconciler ask for it.
+   */
+  MarkSoldResult markSold(Hold hold, UUID orderId, Instant now);
+
   Optional<Hold> findHold(UUID eventId, UUID holdId);
+
+  /**
+   * The holds of an event that a checkout currently owns, oldest freeze first.
+   *
+   * <p>The list the reconciler walks. It is a set in Redis rather than a scan of the seat map,
+   * because a sale of a 50,000 seat venue would otherwise read every seat of it every half minute
+   * to find the handful of holds that are mid-commit.
+   *
+   * @param limit how many to take, so one pass is bounded however many checkouts are open
+   */
+  List<UUID> findFrozenHolds(UUID eventId, int limit);
 
   /**
    * Forgets a hold the expiry set still names although the hold itself is gone.
@@ -65,6 +89,14 @@ public interface SeatHoldStore {
    * run for as long as the sale is open.
    */
   void dropDueEntry(UUID eventId, UUID holdId);
+
+  /**
+   * Forgets a hold the checkout set still names although the hold itself is gone.
+   *
+   * <p>The counterpart of {@link #dropDueEntry} for the set the reconciler reads. Without it the
+   * reconciler would find the same dead entry on every pass for as long as the sale is open.
+   */
+  void dropFrozenEntry(UUID eventId, UUID holdId);
 
   /**
    * The holds of an event that are due at {@code now}, oldest expiry first.

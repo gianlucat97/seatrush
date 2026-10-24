@@ -5,6 +5,7 @@ import com.seatrush.inventory.domain.Hold;
 import com.seatrush.inventory.domain.HoldRequest;
 import com.seatrush.inventory.domain.HoldResult;
 import com.seatrush.inventory.domain.HoldStatus;
+import com.seatrush.inventory.domain.MarkSoldResult;
 import com.seatrush.inventory.domain.ReleaseResult;
 import com.seatrush.inventory.domain.SeatHoldStore;
 import java.time.Duration;
@@ -114,7 +115,8 @@ public class RedisSeatHoldStore implements SeatHoldStore {
                   request.userId(),
                   reply.seatIdsOrElse(request.seatIds()),
                   Instant.ofEpochMilli(reply.requireExpiresAt()),
-                  HoldStatus.ACTIVE),
+                  HoldStatus.ACTIVE,
+                  null),
               reply.requireVersion());
       case "CONFLICT" -> new HoldResult.Conflict(reply.requireConflictingSeatIds());
       case "UNKNOWN_SEAT" -> new HoldResult.UnknownSeats(reply.requireUnknownSeatIds());
@@ -142,7 +144,7 @@ public class RedisSeatHoldStore implements SeatHoldStore {
             callerId.map(UUID::toString).orElse(""),
             String.join(",", allowedStatuses.stream().map(HoldStatus::name).sorted().toList()));
 
-    return releaseResultOf(run(scripts.release(), holdKeys(hold), args));
+    return releaseResultOf(run(scripts.release(), releaseKeys(hold), args));
   }
 
   @Override
@@ -157,7 +159,7 @@ public class RedisSeatHoldStore implements SeatHoldStore {
             STREAM_MAXLEN,
             hold.eventId().toString());
 
-    return releaseResultOf(run(scripts.expire(), holdKeys(hold), args));
+    return releaseResultOf(run(scripts.expire(), expireKeys(hold), args));
   }
 
   @Override
@@ -170,7 +172,10 @@ public class RedisSeatHoldStore implements SeatHoldStore {
     // because a freeze changes none of them, and a key a script declares but never reads would
     // claim a lock on a cluster for no reason.
     List<String> keys =
-        List.of(SeatKeys.holdExpiry(hold.eventId()), SeatKeys.hold(hold.eventId(), hold.id()));
+        List.of(
+            SeatKeys.holdExpiry(hold.eventId()),
+            SeatKeys.hold(hold.eventId(), hold.id()),
+            SeatKeys.holdCheckout(hold.eventId()));
 
     List<String> args =
         List.of(
@@ -189,7 +194,8 @@ public class RedisSeatHoldStore implements SeatHoldStore {
                   hold.userId(),
                   reply.seatIdsOrElse(hold.seatIds()),
                   Instant.ofEpochMilli(reply.requireExpiresAt()),
-                  HoldStatus.CHECKOUT),
+                  HoldStatus.CHECKOUT,
+                  UUID.fromString(reply.requireOrderId())),
               UUID.fromString(reply.requireOrderId()));
       case "ALREADY_FROZEN" ->
           new FreezeResult.AlreadyFrozen(UUID.fromString(reply.requireOrderId()));
@@ -202,6 +208,56 @@ public class RedisSeatHoldStore implements SeatHoldStore {
   }
 
   @Override
+  public MarkSoldResult markSold(Hold hold, UUID orderId, Instant now) {
+    Objects.requireNonNull(hold, "hold must not be null");
+    Objects.requireNonNull(orderId, "orderId must not be null");
+    Objects.requireNonNull(now, "now must not be null");
+
+    UUID eventId = hold.eventId();
+    // The available counter is not here: a sale moves a seat from held to sold, and the counter
+    // was already decremented when the hold took it. Only a release gives one back.
+    List<String> keys =
+        List.of(
+            SeatKeys.seats(eventId),
+            SeatKeys.version(eventId),
+            SeatKeys.holdCheckout(eventId),
+            SeatKeys.userHold(eventId, hold.userId()),
+            SeatKeys.hold(eventId, hold.id()),
+            SeatKeys.seatEvents(eventId));
+
+    List<String> args =
+        List.of(
+            hold.id().toString(),
+            orderId.toString(),
+            Long.toString(now.toEpochMilli()),
+            STREAM_MAXLEN,
+            eventId.toString());
+
+    ScriptReply reply = run(scripts.markSold(), keys, args);
+    return switch (reply.status()) {
+      case "OK" -> new MarkSoldResult.Sold(reply.requireVersion(), reply.soldSeatsOrZero());
+      case "ALREADY_SOLD" -> new MarkSoldResult.AlreadySold();
+      case "NOT_FOUND" -> new MarkSoldResult.NotFound();
+      case "WRONG_STATE" ->
+          new MarkSoldResult.WrongState(
+              HoldStatus.valueOf(reply.holdStatus()),
+              reply.orderId() == null ? null : UUID.fromString(reply.orderId()));
+      default -> throw new IllegalStateException("markSold.lua answered " + reply.status());
+    };
+  }
+
+  @Override
+  public List<UUID> findFrozenHolds(UUID eventId, int limit) {
+    Objects.requireNonNull(eventId, "eventId must not be null");
+    if (limit <= 0) {
+      throw new IllegalArgumentException("limit must be positive, was " + limit);
+    }
+
+    Set<String> frozen = redis.opsForZSet().range(SeatKeys.holdCheckout(eventId), 0, limit - 1L);
+    return Stream.ofNullable(frozen).flatMap(Set::stream).map(UUID::fromString).toList();
+  }
+
+  @Override
   public Optional<Hold> findHold(UUID eventId, UUID holdId) {
     Objects.requireNonNull(eventId, "eventId must not be null");
     Objects.requireNonNull(holdId, "holdId must not be null");
@@ -210,11 +266,14 @@ public class RedisSeatHoldStore implements SeatHoldStore {
         redis
             .<String, String>opsForHash()
             .multiGet(
-                SeatKeys.hold(eventId, holdId), List.of("userId", "seats", "expiresAt", "status"));
+                SeatKeys.hold(eventId, holdId),
+                List.of("userId", "seats", "expiresAt", "status", "orderId"));
     String userId = stored.get(0);
     if (userId == null) {
       return Optional.empty();
     }
+    // Absent until a checkout froze the hold, which is why it is read rather than required.
+    String orderId = stored.get(4);
     return Optional.of(
         new Hold(
             holdId,
@@ -222,7 +281,8 @@ public class RedisSeatHoldStore implements SeatHoldStore {
             UUID.fromString(userId),
             List.of(stored.get(1).split(",")),
             Instant.ofEpochMilli(Long.parseLong(stored.get(2))),
-            HoldStatus.valueOf(stored.get(3))));
+            HoldStatus.valueOf(stored.get(3)),
+            orderId == null ? null : UUID.fromString(orderId)));
   }
 
   @Override
@@ -230,6 +290,13 @@ public class RedisSeatHoldStore implements SeatHoldStore {
     Objects.requireNonNull(eventId, "eventId must not be null");
     Objects.requireNonNull(holdId, "holdId must not be null");
     redis.opsForZSet().remove(SeatKeys.holdExpiry(eventId), holdId.toString());
+  }
+
+  @Override
+  public void dropFrozenEntry(UUID eventId, UUID holdId) {
+    Objects.requireNonNull(eventId, "eventId must not be null");
+    Objects.requireNonNull(holdId, "holdId must not be null");
+    redis.opsForZSet().remove(SeatKeys.holdCheckout(eventId), holdId.toString());
   }
 
   @Override
@@ -282,7 +349,7 @@ public class RedisSeatHoldStore implements SeatHoldStore {
    * else's key. Even if it did, the script only clears that key when it still names this hold,
    * which means a wrong key changes nothing rather than freeing the wrong user.
    */
-  private static List<String> holdKeys(Hold hold) {
+  private static List<String> expireKeys(Hold hold) {
     UUID eventId = hold.eventId();
     return List.of(
         SeatKeys.seats(eventId),
@@ -292,6 +359,19 @@ public class RedisSeatHoldStore implements SeatHoldStore {
         SeatKeys.userHold(eventId, hold.userId()),
         SeatKeys.hold(eventId, hold.id()),
         SeatKeys.seatEvents(eventId));
+  }
+
+  /**
+   * The same, plus the set of frozen holds.
+   *
+   * <p>A release is the one command that reaches a hold in either set, so it is the one that has to
+   * declare both. The expiry script never sees a frozen hold and therefore does not declare the
+   * key: a script that declared a key it never reads would claim a lock on a cluster for nothing.
+   */
+  private static List<String> releaseKeys(Hold hold) {
+    List<String> keys = new ArrayList<>(expireKeys(hold));
+    keys.add(SeatKeys.holdCheckout(hold.eventId()));
+    return List.copyOf(keys);
   }
 
   private ScriptReply run(RedisScript<String> script, List<String> keys, List<String> args) {

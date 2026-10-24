@@ -6,9 +6,11 @@ import com.seatrush.inventory.domain.HoldDirectory;
 import com.seatrush.inventory.domain.HoldRequest;
 import com.seatrush.inventory.domain.HoldResult;
 import com.seatrush.inventory.domain.HoldStatus;
+import com.seatrush.inventory.domain.MarkSoldResult;
 import com.seatrush.inventory.domain.ReleaseResult;
 import com.seatrush.inventory.domain.SeatHoldStore;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,16 +21,21 @@ import java.util.UUID;
 /**
  * The hold store and the directory in memory, for the tests of the freeze use case.
  *
- * <p>Only the freeze is modelled, and only as far as the use case can tell it apart: every outcome
- * is something a test sets up directly. The real state machine lives in Lua and is asserted against
- * a real Redis in {@code HoldFreezeIT}; what this double exists for is the part of the freeze that
- * is Java, which is the pricing and the mapping of an outcome to an answer.
+ * <p>Only what the use cases can tell apart is modelled: every outcome is something a test sets up
+ * directly. The real state machines live in Lua and are asserted against a real Redis in {@code
+ * HoldFreezeIT} and {@code SeatCommitIT}; what this double exists for is the Java around them,
+ * which is the pricing, the reply a given outcome produces, and the order of the two stores.
  */
 final class InMemoryHolds implements SeatHoldStore, HoldDirectory {
 
   private final Map<UUID, UUID> events = new HashMap<>();
   private final Map<UUID, Hold> holds = new HashMap<>();
+  private final List<UUID> frozen = new ArrayList<>();
+  private final List<UUID> markedSold = new ArrayList<>();
   private FreezeResult nextFreeze;
+  private MarkSoldResult nextMarkSold;
+  private ReleaseResult nextRelease;
+  private long version;
 
   /** Records a hold the way a successful place would, directory entry included. */
   void store(Hold hold) {
@@ -39,6 +46,27 @@ final class InMemoryHolds implements SeatHoldStore, HoldDirectory {
   /** Makes the hold findable but the freeze answer whatever the test is interested in. */
   void freezeAnswers(FreezeResult result) {
     this.nextFreeze = result;
+  }
+
+  /** Makes the mark sold script answer whatever the test is interested in. */
+  void markSoldAnswers(MarkSoldResult result) {
+    this.nextMarkSold = result;
+  }
+
+  /** Makes the release script answer whatever the test is interested in. */
+  void releaseAnswers(ReleaseResult result) {
+    this.nextRelease = result;
+  }
+
+  /** Records a hold as frozen for an order, the way a successful freeze would. */
+  void storeFrozen(Hold hold) {
+    store(hold);
+    frozen.add(hold.id());
+  }
+
+  /** The holds the commit or the reconciler asked the seat map about, in order. */
+  List<UUID> markedSold() {
+    return List.copyOf(markedSold);
   }
 
   /** Forgets the directory entry, leaving a hold nobody can address by id alone. */
@@ -58,9 +86,50 @@ final class InMemoryHolds implements SeatHoldStore, HoldDirectory {
             hold.userId(),
             hold.seatIds(),
             hold.expiresAt(),
-            HoldStatus.CHECKOUT);
+            HoldStatus.CHECKOUT,
+            orderId);
     holds.put(frozen.id(), frozen);
     return new FreezeResult.Frozen(frozen, orderId);
+  }
+
+  @Override
+  public void dropFrozenEntry(UUID eventId, UUID holdId) {
+    frozen.remove(holdId);
+  }
+
+  /**
+   * Marks the seats sold, with the one branch that decides what the commit does next.
+   *
+   * <p>A test can make it answer anything, because the outcomes the script produces are what the
+   * use case has to map; left alone it behaves like the script does for a hold that is this order's
+   * to sell.
+   */
+  @Override
+  public MarkSoldResult markSold(Hold hold, UUID orderId, Instant now) {
+    markedSold.add(hold.id());
+    if (nextMarkSold != null) {
+      return nextMarkSold;
+    }
+    Hold consumed =
+        new Hold(
+            hold.id(),
+            hold.eventId(),
+            hold.userId(),
+            hold.seatIds(),
+            hold.expiresAt(),
+            HoldStatus.CONSUMED,
+            orderId);
+    holds.put(consumed.id(), consumed);
+    frozen.remove(hold.id());
+    return new MarkSoldResult.Sold(++version, consumed.seatCount());
+  }
+
+  @Override
+  public List<UUID> findFrozenHolds(UUID eventId, int limit) {
+    return frozen.stream()
+        .filter(holdId -> eventId.equals(events.get(holdId)))
+        .limit(limit)
+        .toList();
   }
 
   @Override
@@ -86,7 +155,24 @@ final class InMemoryHolds implements SeatHoldStore, HoldDirectory {
   @Override
   public ReleaseResult release(
       Hold hold, Optional<UUID> callerId, Set<HoldStatus> allowedStatuses, Instant now) {
-    throw new UnsupportedOperationException("the release path is covered by HoldIT");
+    if (nextRelease != null) {
+      return nextRelease;
+    }
+    if (!allowedStatuses.contains(hold.status())) {
+      return new ReleaseResult.WrongState(hold.status());
+    }
+    Hold released =
+        new Hold(
+            hold.id(),
+            hold.eventId(),
+            hold.userId(),
+            hold.seatIds(),
+            hold.expiresAt(),
+            HoldStatus.RELEASED,
+            hold.orderId());
+    holds.put(released.id(), released);
+    frozen.remove(hold.id());
+    return new ReleaseResult.Released(++version, released.seatCount());
   }
 
   @Override

@@ -209,6 +209,8 @@ class HoldControllerTest {
   }
 
   private static Hold hold(HoldStatus status) {
-    return new Hold(HOLD_ID, EVENT_ID, USER_ID, List.of("A-1-1", "A-1-2"), EXPIRES_AT, status);
+    // Only the statuses this controller shows are built here, and none of them is a checkout.
+    return new Hold(
+        HOLD_ID, EVENT_ID, USER_ID, List.of("A-1-1", "A-1-2"), EXPIRES_AT, status, null);
   }
 }

@@ -23,6 +23,16 @@ spring:
         enable.idempotence: true
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    consumer:
+      # One group for the whole deployment: a command is performed by exactly one pod. That is
+      # the opposite of the broadcast pattern realtime uses for seat events.
+      group-id: ${KAFKA_GROUP_ID:inventory-service}
+      # Commands that arrived while every pod was down are still commands.
+      auto-offset-reset: earliest
+      # The container commits the offset itself, after the handler has returned.
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
   data:
     redis:
       # The seat state of a live sale (README section 9.2).
@@ -53,6 +63,17 @@ seatrush:
     # abandoned hold are back almost immediately.
     sweeper-interval: ${SEATRUSH_HOLD_SWEEPER_INTERVAL:1s}
     sweeper-batch-size: ${SEATRUSH_HOLD_SWEEPER_BATCH_SIZE:500}
+  reconciler:
+    # The window of README section 9.6 step 5: a pod that died between the sale and the seat map.
+    # Seconds and not milliseconds, because nothing is wrong while this waits, the seats are
+    # unavailable to everybody either way, and only the hold is left dangling.
+    interval: ${SEATRUSH_RECONCILER_INTERVAL:30s}
+    batch-size: ${SEATRUSH_RECONCILER_BATCH_SIZE:500}
+  consumer:
+    # Bounded retries and then the dead letter topic (README sections 10.3 and 16).
+    retries: ${SEATRUSH_CONSUMER_RETRIES:3}
+    retry-backoff: ${SEATRUSH_CONSUMER_RETRY_BACKOFF:500ms}
+    retry-max-backoff: ${SEATRUSH_CONSUMER_RETRY_MAX_BACKOFF:5s}
   outbox:
     # The Postgres outbox of README section 9.5, which seatrush-messaging contributes to every
     # service that owns a database. Both values are the defaults of README section 22 and are

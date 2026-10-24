@@ -1,10 +1,11 @@
 -- Freezes an active hold into a checkout (README sections 8.3 and 9.2).
 --
 -- This is the step that hands a hold over from its user to the checkout SAGA. Two things change
--- and nothing else: the status becomes CHECKOUT and the hold leaves the expiry set, so the sweeper
--- of README section 9.3 stops looking at it. From here the SAGA owns the hold and ends it with
--- either a commit or a release, which is why its countdown has to stop in the same step that takes
--- it over: a sweeper that expired a hold being paid for would take the seats off a live order.
+-- and nothing else: the status becomes CHECKOUT, and the hold moves out of the expiry set the
+-- sweeper of README section 9.3 reads and into the set the reconciler of README section 9.6 reads.
+-- From here the SAGA owns the hold and ends it with either a commit or a release, which is why its
+-- countdown has to stop in the same step that takes it over: a sweeper that expired a hold being
+-- paid for would take the seats off a live order.
 --
 -- The seat state is deliberately untouched. The seats were already H:<holdId> before this ran and
 -- they still are, so the seat map does not change, there is no version to hand out and there is no
@@ -17,6 +18,7 @@
 --
 -- KEYS[1] expiry sorted set    ACTIVE holdId scored by expiresAt
 -- KEYS[2] hold hash            the hold itself
+-- KEYS[3] checkout sorted set  CHECKOUT holdId scored by the instant it was frozen
 --
 -- ARGV[1] holdId
 -- ARGV[2] orderId              the order taking the hold over
@@ -28,6 +30,7 @@
 
 local expiry_key = KEYS[1]
 local hold_key = KEYS[2]
+local checkout_key = KEYS[3]
 
 local hold_id = ARGV[1]
 local order_id = ARGV[2]
@@ -82,6 +85,9 @@ end
 
 redis.call('HSET', hold_key, 'status', 'CHECKOUT', 'orderId', order_id)
 redis.call('ZREM', expiry_key, hold_id)
+-- Into the set the reconciler of README section 9.6 walks. A hold leaves it when it is committed
+-- or released, so what is in it is exactly what a SAGA currently owns.
+redis.call('ZADD', checkout_key, now, hold_id)
 
 return cjson.encode({
   status = 'OK',

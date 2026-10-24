@@ -4,6 +4,7 @@ import com.seatrush.inventory.domain.Event;
 import com.seatrush.inventory.domain.EventRepository;
 import com.seatrush.inventory.domain.EventStatus;
 import com.seatrush.inventory.domain.Seat;
+import com.seatrush.inventory.domain.SeatAlreadySoldException;
 import com.seatrush.inventory.domain.SeatPrice;
 import com.seatrush.inventory.domain.SeatRepository;
 import com.seatrush.inventory.domain.SeatSaleRepository;
@@ -34,6 +35,7 @@ final class InMemoryCatalog implements EventRepository, SeatRepository, SeatSale
   private final Map<UUID, List<Section>> sections = new HashMap<>();
   private final Map<UUID, List<Seat>> seats = new HashMap<>();
   private final Map<UUID, Set<String>> sold = new HashMap<>();
+  private final Map<UUID, List<String>> salesByOrder = new HashMap<>();
 
   /** Set to true to make every status update lose its race, as a concurrent one would. */
   private boolean statusUpdatesLose;
@@ -113,6 +115,22 @@ final class InMemoryCatalog implements EventRepository, SeatRepository, SeatSale
             seat ->
                 new SeatPrice(seat.id(), seat.sectionId(), priced.get(seat.sectionId()).price()))
         .toList();
+  }
+
+  @Override
+  public void insertSales(UUID eventId, UUID orderId, List<String> seatIds) {
+    Set<String> alreadySold = sold.computeIfAbsent(eventId, id -> new HashSet<>());
+    if (seatIds.stream().anyMatch(alreadySold::contains)) {
+      throw new SeatAlreadySoldException(eventId, orderId, null);
+    }
+    alreadySold.addAll(seatIds);
+    seatIds.forEach(
+        seatId -> salesByOrder.computeIfAbsent(orderId, id -> new ArrayList<>()).add(seatId));
+  }
+
+  @Override
+  public List<String> findSeatIdsOfOrder(UUID eventId, UUID orderId) {
+    return List.copyOf(salesByOrder.getOrDefault(orderId, List.of()));
   }
 
   @Override

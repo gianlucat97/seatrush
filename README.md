@@ -442,6 +442,7 @@ All keys of an event share the hash tag `{evt:<eventId>}`, so multi-key Lua scri
 | `seats:{evt:<id>}:available` | STRING | counter of available seats (sold-out detection) |
 | `hold:{evt:<id>}:<holdId>` | HASH | `userId`, `seats`, `expiresAt`, `status`, `orderId` |
 | `holds:{evt:<id>}:expiry` | ZSET | `ACTIVE` holdIds scored by `expiresAt` |
+| `holds:{evt:<id>}:checkout` | ZSET | `CHECKOUT` holdIds scored by the instant they were frozen, read by the reconciler |
 | `userhold:{evt:<id>}:<userId>` | STRING | holdId of the user's active hold (I8) |
 | `idem:{evt:<id>}:<userId>:<key>` | STRING | stored response of a hold command, TTL 24h |
 | `seat-events:{evt:<id>}` | STREAM | seat events waiting to be relayed to Kafka (capped with `MAXLEN ~`) |
@@ -479,8 +480,8 @@ Companion scripts:
 |--------|--------|
 | `release.lua` | `ACTIVE`/`CHECKOUT` → `RELEASED`; seats back to `A`; clears `userhold`; `SeatsReleased` |
 | `expire.lua` | Like release, but only if status is still `ACTIVE` and `expiresAt` ≤ now; otherwise no-op |
-| `freeze.lua` | `ACTIVE` → `CHECKOUT`, stores `orderId`, removes from expiry set; idempotent for the same `orderId`; fails if expired or frozen by another order |
-| `markSold.lua` | `CHECKOUT` → `CONSUMED`; seats → `S`; clears `userhold`; `SeatsSold`; idempotent |
+| `freeze.lua` | `ACTIVE` → `CHECKOUT`, stores `orderId`, moves the hold from the expiry set to the checkout set; idempotent for the same `orderId`; fails if expired or frozen by another order |
+| `markSold.lua` | `CHECKOUT` → `CONSUMED`; seats → `S`; clears `userhold`; leaves the checkout set; `SeatsSold`; idempotent for the same `orderId` |
 
 Note: a released or sold seat increments/decrements `available` accordingly; when `available` reaches 0 *and* no seat is held, the event is sold out.
 
@@ -1065,6 +1066,7 @@ Main properties (all overridable via environment variables):
 | `seatrush.hold.sweeper-interval` | inventory | `1s` | Expiry sweeper period |
 | `seatrush.hold.sweeper-batch-size` | inventory | `500` | Holds expired per sweep |
 | `seatrush.reconciler.interval` | inventory | `30s` | Redis/Postgres reconciliation period |
+| `seatrush.reconciler.batch-size` | inventory | `500` | Frozen holds examined per event per pass |
 | `seatrush.admission.rate-per-second` | queue | `500` | Users admitted per second per event |
 | `seatrush.admission.max-active-users` | queue | `5000` | Max users concurrently admitted |
 | `seatrush.admission.token-ttl` | queue | `10m` | Admission token lifetime |

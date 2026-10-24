@@ -18,6 +18,7 @@ record ScriptReply(
     Long version,
     Long expiresAt,
     Integer freedSeats,
+    Integer soldSeats,
     String holdStatus,
     List<String> seatIds,
     List<String> conflictingSeatIds,
@@ -45,6 +46,10 @@ record ScriptReply(
 
   int freedSeatsOrZero() {
     return freedSeats == null ? 0 : freedSeats;
+  }
+
+  int soldSeatsOrZero() {
+    return soldSeats == null ? 0 : soldSeats;
   }
 
   /** The seats the script confirmed, falling back to the ones that were asked for. */

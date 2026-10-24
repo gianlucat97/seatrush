@@ -16,6 +16,7 @@
 -- KEYS[5] userhold
 -- KEYS[6] hold hash
 -- KEYS[7] seat events stream
+-- KEYS[8] checkout sorted set   CHECKOUT holdId, which a compensation takes a hold out of
 --
 -- ARGV[1] holdId
 -- ARGV[2] now                epoch millis
@@ -33,6 +34,7 @@ local expiry_key = KEYS[4]
 local userhold_key = KEYS[5]
 local hold_key = KEYS[6]
 local stream_key = KEYS[7]
+local checkout_key = KEYS[8]
 
 local hold_id = ARGV[1]
 local now = tonumber(ARGV[2])
@@ -78,6 +80,9 @@ end
 
 redis.call('HSET', hold_key, 'status', 'RELEASED')
 redis.call('ZREM', expiry_key, hold_id)
+-- Out of whichever set held it. An ACTIVE hold is in the expiry set and a frozen one is in the
+-- checkout set, and a release is the one command that reaches both.
+redis.call('ZREM', checkout_key, hold_id)
 -- Only if it still points at this hold: the user may already hold something else.
 if redis.call('GET', userhold_key) == hold_id then
   redis.call('DEL', userhold_key)
