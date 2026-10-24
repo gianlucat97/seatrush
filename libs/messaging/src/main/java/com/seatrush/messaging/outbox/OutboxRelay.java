@@ -65,6 +65,9 @@ public class OutboxRelay {
     this.clock = Objects.requireNonNull(clock, "clock must not be null");
     Objects.requireNonNull(meters, "meters must not be null");
 
+    // The registry keeps only a weak reference to what a gauge observes, which here is the field
+    // below and therefore this relay. That is correct for a singleton bean and is why the relay
+    // must be one: a gauge whose subject has been collected reports NaN rather than a stale value.
     Gauge.builder("seatrush.outbox.lag.seconds", lagMillis, holder -> holder.get() / 1000.0)
         .tag("store", "postgres")
         .description("Age of the oldest unpublished outbox entry")
