@@ -1,8 +1,10 @@
 package com.seatrush.order.application;
 
+import com.seatrush.messaging.messages.FailureReason;
 import com.seatrush.order.domain.DuplicateOrderException;
 import com.seatrush.order.domain.Order;
 import com.seatrush.order.domain.OrderRepository;
+import com.seatrush.order.domain.OrderStatus;
 import com.seatrush.order.domain.SagaInstance;
 import com.seatrush.order.domain.SagaRepository;
 import java.time.Instant;
@@ -26,6 +28,7 @@ final class InMemoryOrders implements OrderRepository, SagaRepository {
 
   private final Map<UUID, Order> orders = new LinkedHashMap<>();
   private final Map<UUID, SagaInstance> sagas = new HashMap<>();
+  private boolean failNextAdvance;
 
   /** Set to make the next insert lose a race on the idempotency key, as a concurrent one would. */
   private Order concurrentWinner;
@@ -57,6 +60,47 @@ final class InMemoryOrders implements OrderRepository, SagaRepository {
       throw new DuplicateOrderException("an order already holds that key or that hold", null);
     }
     orders.put(order.id(), order);
+  }
+
+  /**
+   * Moves an order, refusing to if it is not in the status the caller expected.
+   *
+   * <p>The compare is imitated because it is the mechanism: the SAGA relies on exactly one of two
+   * pods being allowed to move a checkout, and a double that moved it either way would make the
+   * tests of that race assert the opposite of what the service does.
+   */
+  @Override
+  public boolean transition(
+      UUID orderId, OrderStatus from, OrderStatus to, FailureReason failureReason, Instant at) {
+    Order stored = orders.get(orderId);
+    if (stored == null || stored.status() != from) {
+      return false;
+    }
+    // The same rule the adapter and the schema hold. The double was more permissive than both
+    // once, and a wrong reason on a status went unnoticed until an integration test ran.
+    if (failureReason == null && to == OrderStatus.FAILED) {
+      throw new IllegalArgumentException("a failed order says why, order " + orderId);
+    }
+    if (failureReason != null && to != OrderStatus.FAILED && to != OrderStatus.COMPENSATING) {
+      throw new IllegalArgumentException(
+          "a %s order carries no failure reason, order %s".formatted(to, orderId));
+    }
+    orders.put(
+        orderId,
+        new Order(
+            stored.id(),
+            stored.userId(),
+            stored.eventId(),
+            stored.holdId(),
+            to,
+            failureReason,
+            stored.items(),
+            stored.total(),
+            stored.idempotencyKey(),
+            stored.requestHash(),
+            stored.createdAt(),
+            at));
+    return true;
   }
 
   @Override
@@ -92,6 +136,59 @@ final class InMemoryOrders implements OrderRepository, SagaRepository {
   @Override
   public Optional<SagaInstance> findByOrderId(UUID orderId) {
     return Optional.ofNullable(sagas.get(orderId));
+  }
+
+  /**
+   * Writes the next state only if nobody else moved it first, which is the optimistic lock.
+   *
+   * <p>Imitated for the same reason as the order's: it is what decides between a reply and a
+   * timeout reaching one checkout at once, and a double that always wrote would hide the one
+   * outcome those tests exist to pin down.
+   */
+  @Override
+  public boolean advance(SagaInstance next) {
+    if (failNextAdvance) {
+      failNextAdvance = false;
+      return false;
+    }
+    SagaInstance stored = sagas.get(next.orderId());
+    if (stored == null || stored.version() != next.version()) {
+      return false;
+    }
+    sagas.put(
+        next.orderId(),
+        new SagaInstance(
+            next.orderId(),
+            next.step(),
+            next.status(),
+            next.deadlineAt(),
+            next.nextAttemptAt(),
+            next.retries(),
+            next.compensationsPending(),
+            next.version() + 1));
+    return true;
+  }
+
+  @Override
+  public List<SagaInstance> findOverdue(Instant now, int limit) {
+    return sagas.values().stream().filter(saga -> saga.isOverdue(now)).limit(limit).toList();
+  }
+
+  @Override
+  public List<SagaInstance> findRetryDue(Instant now, int limit) {
+    return sagas.values().stream().filter(saga -> saga.isRetryDue(now)).limit(limit).toList();
+  }
+
+  /**
+   * Makes the next advance lose its compare, as a concurrent one would.
+   *
+   * <p>A flag rather than a bump of the stored version, because a handler reads the SAGA before it
+   * writes: bumping it beforehand would only hand the handler the new version and the race would
+   * not happen. What has to be imitated is somebody moving the row between that read and that
+   * write, and only the write can be made to fail.
+   */
+  void failTheNextAdvance() {
+    this.failNextAdvance = true;
   }
 
   /** Makes the next insert fail the way a concurrent request with the same key would. */

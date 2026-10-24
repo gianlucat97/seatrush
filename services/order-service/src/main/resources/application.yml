@@ -25,6 +25,15 @@ spring:
         enable.idempotence: true
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    consumer:
+      # One group for the whole deployment: a reply advances the SAGA once, on one pod.
+      group-id: ${KAFKA_GROUP_ID:order-service}
+      # Replies that arrived while every pod was down still have to advance their SAGA.
+      auto-offset-reset: earliest
+      # The container commits the offset itself, after the handler has returned.
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
   flyway:
     # The service owns the schema of its own database and migrates it on startup.
     enabled: true
@@ -43,6 +52,16 @@ seatrush:
     # for a payment provider having a slow minute and short enough that a user is not left
     # watching a spinner over seats somebody else could be buying.
     timeout: ${SEATRUSH_CHECKOUT_TIMEOUT:2m}
+    # Past the pivot there is nothing to compensate, so a capture is retried until it works and
+    # then alerted on (README section 8.3).
+    capture-max-retries: ${SEATRUSH_CHECKOUT_CAPTURE_MAX_RETRIES:10}
+    capture-backoff: ${SEATRUSH_CHECKOUT_CAPTURE_BACKOFF:1s}
+    capture-max-backoff: ${SEATRUSH_CHECKOUT_CAPTURE_MAX_BACKOFF:60s}
+    # A second: it decides how late a timeout fires and how long a user waits to be told their
+    # checkout failed. The scheduler is safe on every pod at once, so a short interval costs a
+    # cheap indexed query per pod and nothing else.
+    scheduler-interval: ${SEATRUSH_CHECKOUT_SCHEDULER_INTERVAL:1s}
+    scheduler-batch-size: ${SEATRUSH_CHECKOUT_SCHEDULER_BATCH_SIZE:500}
   inventory:
     # Inside the cluster this is a service name; locally it is the port inventory listens on.
     base-url: ${SEATRUSH_INVENTORY_BASE_URL:http://localhost:8081}
@@ -50,6 +69,11 @@ seatrush:
     # Shorter than the checkout deadline on purpose: a freeze that hangs has to give the user an
     # error they can retry while their hold is still alive.
     read-timeout: ${SEATRUSH_INVENTORY_READ_TIMEOUT:3s}
+  consumer:
+    # Bounded retries and then the dead letter topic (README sections 10.3 and 16).
+    retries: ${SEATRUSH_CONSUMER_RETRIES:3}
+    retry-backoff: ${SEATRUSH_CONSUMER_RETRY_BACKOFF:500ms}
+    retry-max-backoff: ${SEATRUSH_CONSUMER_RETRY_MAX_BACKOFF:5s}
   outbox:
     # The Postgres outbox of README section 9.5, which seatrush-messaging contributes to every
     # service that owns a database. Both values are the defaults of README section 22 and are

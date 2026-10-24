@@ -675,6 +675,9 @@ CREATE TABLE saga_instance (
     deadline_at      TIMESTAMPTZ,          -- NULL once CommitSeats has been sent
     next_attempt_at  TIMESTAMPTZ,          -- capture retries after the pivot
     retries          INT NOT NULL DEFAULT 0,
+    -- The compensations still waiting for a reply, as a set: a late PaymentAuthorized sends a
+    -- second VoidPayment (§8.3), and a counter would be decremented twice by its acknowledgement
+    compensations_pending TEXT NOT NULL DEFAULT '',
     version          BIGINT NOT NULL DEFAULT 0
 );
 CREATE INDEX saga_deadline ON saga_instance (deadline_at) WHERE status = 'RUNNING';
@@ -1073,7 +1076,10 @@ Main properties (all overridable via environment variables):
 | `seatrush.queue.position-update-interval` | queue | `3s` | SSE position update period |
 | `seatrush.checkout.timeout` | order | `2m` | SAGA deadline before the pivot |
 | `seatrush.checkout.capture-max-retries` | order | `10` | Capture retries after the pivot |
-| `seatrush.checkout.capture-backoff` | order | `1s..60s` | Exponential backoff bounds |
+| `seatrush.checkout.capture-backoff` | order | `1s` | Pause before the first capture retry |
+| `seatrush.checkout.capture-max-backoff` | order | `60s` | Ceiling the capture backoff doubles up to |
+| `seatrush.checkout.scheduler-interval` | order | `1s` | How often overdue SAGAs and due capture retries are picked up |
+| `seatrush.checkout.scheduler-batch-size` | order | `500` | SAGAs taken per scheduler pass |
 | `seatrush.inventory.base-url` | order | `http://localhost:8081` | Inventory internal API, called by the synchronous freeze |
 | `seatrush.inventory.connect-timeout` | order | `1s` | Connect timeout of the freeze call |
 | `seatrush.inventory.read-timeout` | order | `3s` | Read timeout of the freeze call, kept below the checkout deadline |

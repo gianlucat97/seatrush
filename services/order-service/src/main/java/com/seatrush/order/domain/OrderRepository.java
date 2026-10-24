@@ -1,5 +1,6 @@
 package com.seatrush.order.domain;
 
+import com.seatrush.messaging.messages.FailureReason;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -41,4 +42,17 @@ public interface OrderRepository {
    *     page
    */
   List<Order> findByUser(UUID userId, Instant before, int limit);
+
+  /**
+   * Moves an order to its next status; the caller owns the transaction.
+   *
+   * <p>The expected status is part of the statement rather than checked beforehand, so the write is
+   * the only place the decision is made. The SAGA row is what the schedulers and the replies really
+   * race over, and this is the order's half of the same fact: both move, or neither does.
+   *
+   * @param failureReason required when moving to {@code FAILED}, absent otherwise
+   * @return whether the order was in {@code from} and has now been moved
+   */
+  boolean transition(
+      UUID orderId, OrderStatus from, OrderStatus to, FailureReason failureReason, Instant at);
 }

@@ -71,7 +71,13 @@ class CheckoutServiceTest {
           new TransactionTemplate(transactionManager),
           ids,
           clock,
-          new CheckoutProperties(TIMEOUT),
+          new CheckoutProperties(
+              TIMEOUT,
+              10,
+              Duration.ofSeconds(1),
+              Duration.ofSeconds(60),
+              Duration.ofSeconds(1),
+              500),
           meters);
 
   @Test

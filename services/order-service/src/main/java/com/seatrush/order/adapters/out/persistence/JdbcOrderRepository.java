@@ -60,6 +60,23 @@ public class JdbcOrderRepository implements OrderRepository {
    * the seats in is not kept: {@code order_item} has no sequence column, and inventing one to
    * preserve a presentation detail would be a column the correctness of nothing depends on.
    */
+  /**
+   * One status move.
+   *
+   * <p>The reason is set on the way to {@code FAILED} and cleared on every other move, so a status
+   * and a reason can never disagree: the schema refuses the combination, and this is what keeps a
+   * compensating order's reason from surviving onto something else.
+   */
+  private static final String TRANSITION =
+      """
+      UPDATE customer_order
+      SET status = :to,
+          failure_reason = :failureReason,
+          updated_at = :updatedAt
+      WHERE id = :orderId
+        AND status = :from
+      """;
+
   private static final String SELECT_ORDERS =
       """
       SELECT o.id, o.user_id, o.event_id, o.hold_id, o.status, o.failure_reason,
@@ -114,6 +131,43 @@ public class JdbcOrderRepository implements OrderRepository {
         order.items().stream()
             .map(item -> itemParameters(order.id(), item))
             .toArray(SqlParameterSource[]::new));
+  }
+
+  /**
+   * {@inheritDoc}
+   *
+   * <p>The expected status is in the WHERE clause, so the statement is both the check and the
+   * change. Reading the order first and comparing in Java would leave a window two pods could both
+   * pass through, and the one thing this must never do is let a checkout be confirmed and failed.
+   */
+  @Override
+  public boolean transition(
+      UUID orderId, OrderStatus from, OrderStatus to, FailureReason failureReason, Instant at) {
+    if (!from.canTransitionTo(to)) {
+      // Refused here rather than by the database, because the vocabulary of the schema allows any
+      // status and only the state machine knows which moves exist.
+      throw new IllegalArgumentException(
+          "an order cannot go from %s to %s, order %s".formatted(from, to, orderId));
+    }
+    // The same rule the schema enforces: a failure always says why, a compensation already knows
+    // and may carry it on the way down, and nothing else may have one. Checked here too so a
+    // mistake is a message about the status and not a constraint violation three layers away.
+    boolean reasonAllowed = to == OrderStatus.FAILED || to == OrderStatus.COMPENSATING;
+    if (failureReason == null && to == OrderStatus.FAILED) {
+      throw new IllegalArgumentException("a failed order says why, order " + orderId);
+    }
+    if (failureReason != null && !reasonAllowed) {
+      throw new IllegalArgumentException(
+          "a %s order carries no failure reason, order %s".formatted(to, orderId));
+    }
+    return jdbc.sql(TRANSITION)
+            .param("orderId", orderId)
+            .param("from", from.name())
+            .param("to", to.name())
+            .param("failureReason", failureReason == null ? null : failureReason.name())
+            .param("updatedAt", OffsetDateTime.ofInstant(at, ZoneOffset.UTC))
+            .update()
+        == 1;
   }
 
   @Override
