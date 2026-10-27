@@ -174,6 +174,8 @@ Single entry point for clients. Built on Spring Cloud Gateway (reactive), so it 
 Implements the lobby and the FIFO virtual waiting room.
 
 - **Lobby**: users who join before `onSaleAt` are put in a lobby set. At opening time, the lobby is **shuffled once** and appended to the queue in that random order (arriving early gives no advantage over arriving a minute early; this prevents a "refresh at midnight" race). Users joining after opening are appended in arrival order.
+- **What opens the doors** is inventory reporting the event as `ON_SALE`, not this service's clock (ADR-0015). Inventory warms the seat map into Redis as part of that transition, so a lobby drained a second early by a local clock would put buyers in front of a sale that still refuses them. queue-service polls the catalog (`seatrush.queue.catalog-refresh-interval`) and keeps serving the last answer it got if inventory is unreachable, because the users waiting are precisely the ones whose sale is about to open.
+- **Shuffled in the service, not in Lua**: Redis makes `math.random` deterministic so that a replica replaying a script reaches the same state, which would turn the shuffle into a fixed permutation that merely looks fair. The order is produced with `SecureRandom` and passed in; `SREM` on the lobby set is the claim, so every pod may drain the same lobby at once without a leader and each user still gets exactly one sequence number.
 - **Sequence numbers**: each queued user receives a strictly increasing sequence number from `INCR` (no timestamp ties). The queue is a sorted set scored by sequence.
 - **Admission job**: runs every second, pops up to `rate-per-second` users (`ZPOPMIN`), but never lets more than `max-active-users` be inside the purchase area at the same time. It also stores the highest admitted sequence (`head`).
 - **Position**: computed as `mySeq - head` (O(1), no `ZRANK` on 200k entries). It is an upper bound that never increases; users who leave make it slightly pessimistic, which is acceptable.
@@ -450,7 +452,7 @@ All keys of an event share the hash tag `{evt:<eventId>}`, so multi-key Lua scri
 | `queue:{evt:<id>}` | ZSET | `userId` scored by sequence number |
 | `queue:{evt:<id>}:seq` | STRING | sequence counter |
 | `queue:{evt:<id>}:head` | STRING | highest admitted sequence |
-| `queue:{evt:<id>}:user:<userId>` | STRING | user's sequence (idempotent join, position) |
+| `queue:{evt:<id>}:user:<userId>` | STRING | user's sequence (idempotent join, position), TTL 24h |
 | `active:{evt:<id>}` | ZSET | admitted `userId` scored by admission expiry |
 | `ratelimit:<scope>:<key>` | HASH | token bucket state (not event-scoped) |
 
@@ -971,7 +973,7 @@ seatrush/
 ├── services/
 │   ├── gateway/
 │   ├── queue-service/
-│   │   └── src/main/resources/redis/   # Lua scripts (join, admit)
+│   │   └── src/main/resources/redis/   # Lua scripts (join, leave, openLobby, admit)
 │   ├── inventory-service/
 │   │   └── src/main/resources/redis/   # Lua scripts (hold, release, expire, freeze, markSold)
 │   ├── order-service/
@@ -1084,7 +1086,10 @@ Main properties (all overridable via environment variables):
 | `seatrush.checkout.capture-max-backoff` | order | `60s` | Ceiling the capture backoff doubles up to |
 | `seatrush.checkout.scheduler-interval` | order | `1s` | How often overdue SAGAs and due capture retries are picked up |
 | `seatrush.checkout.scheduler-batch-size` | order | `500` | SAGAs taken per scheduler pass |
-| `seatrush.inventory.base-url` | order | `http://localhost:8081` | Inventory internal API, called by the synchronous freeze |
+| `seatrush.queue.catalog-refresh-interval` | queue | `1s` | How often inventory's event list is read, which is also how late a sale can open |
+| `seatrush.queue.lobby-open-interval` | queue | `1s` | How often an open sale is checked for a lobby still to drain |
+| `seatrush.queue.lobby-open-chunk-size` | queue | `1000` | Users appended to the queue per Lua call; the whole lobby is still shuffled as one |
+| `seatrush.inventory.base-url` | order, queue | `http://localhost:8081` | Inventory API: the synchronous freeze for order, the event list for queue |
 | `seatrush.inventory.connect-timeout` | order | `1s` | Connect timeout of the freeze call |
 | `seatrush.inventory.read-timeout` | order | `3s` | Read timeout of the freeze call, kept below the checkout deadline |
 | `seatrush.outbox.poll-interval` | all | `100ms` | Postgres outbox relay period |
@@ -1164,6 +1169,7 @@ ADRs live in `docs/adr/` using the format *Context → Decision → Consequences
 | 0012 | One active hold per user per event |
 | 0013 | Synchronous hold freeze at order creation |
 | 0014 | Admission as a signed bearer token instead of a lookup against queue-service |
+| 0015 | The lobby opens on inventory's sale status, never on queue-service's own clock |
 
 ## 26. Roadmap
 
