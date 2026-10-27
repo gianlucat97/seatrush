@@ -1,0 +1,59 @@
+# The defaults point at the Docker Compose stack of deploy/docker-compose, so the service
+# starts against make up with no configuration. Every value is overridable by environment
+# variable, which is how the container and the Helm chart set them (README section 22).
+spring:
+  application:
+    name: queue-service
+  threads:
+    # Virtual threads: every request of this service blocks on Redis, and the platform thread
+    # pool is exactly the limit README section 15 does not want (section 19).
+    virtual:
+      enabled: true
+  data:
+    redis:
+      # The lobby, the queue and its counters (README section 9.2). This service has no
+      # database of its own: Redis is all of its state.
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+  jackson:
+    datatype:
+      datetime:
+        # Instants as ISO-8601 strings, the format README section 12 publishes. Set
+        # explicitly because it is part of the contract, not because Jackson 3 would
+        # default the other way. In Jackson 3 this switch moved out of the
+        # serialization features, so the key is no longer spring.jackson.serialization.
+        write-dates-as-timestamps: false
+
+seatrush:
+  queue:
+    # How far behind the catalog this service is allowed to be, which is also how late a sale
+    # can open: inventory moves an event to ON_SALE and the lobby is shuffled within one
+    # interval. One read per second serves every join of that second.
+    catalog-refresh-interval: ${SEATRUSH_QUEUE_CATALOG_REFRESH_INTERVAL:1s}
+    # The opener keeps passing over an open sale after its lobby is empty, so that a join which
+    # landed in the lobby a moment before the doors opened is not left there.
+    lobby-open-interval: ${SEATRUSH_QUEUE_LOBBY_OPEN_INTERVAL:1s}
+    # Only how many users travel in one Lua call. The whole lobby is still shuffled as one,
+    # because a shuffle of part of it would not be a shuffle.
+    lobby-open-chunk-size: ${SEATRUSH_QUEUE_LOBBY_OPEN_CHUNK_SIZE:1000}
+  inventory:
+    # The catalog is read from inventory (README section 12.2). Both timeouts stay below the
+    # refresh interval, so a hung read cannot pile one refresh on top of the next.
+    base-url: ${SEATRUSH_INVENTORY_BASE_URL:http://localhost:8081}
+    connect-timeout: ${SEATRUSH_INVENTORY_CONNECT_TIMEOUT:1s}
+    read-timeout: ${SEATRUSH_INVENTORY_READ_TIMEOUT:2s}
+
+server:
+  port: ${SERVER_PORT:8084}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # Health for the container probe, info for the build it is running. The Prometheus
+        # endpoint arrives with the observability module.
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
