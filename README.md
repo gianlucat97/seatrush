@@ -791,6 +791,7 @@ All endpoints are served through the gateway under `/api`. Errors follow **RFC 9
 - **User authentication**: JWT (HS256 locally, RS256 with a JWKS endpoint on Kubernetes), validated at the gateway. `userId` is propagated to services in `X-User-Id`, set only by the gateway; services are reachable only from inside the cluster.
 - **Authorization**: users can only read and act on their own holds and orders; admin endpoints require the `ADMIN` role claim.
 - **Admission tokens**: separate signing key, bound to `userId` + `eventId`, short TTL (default 10 minutes). Required for purchase commands only.
+- **Token verification** (`libs/security`): both tokens are JWTs signed with HS256 by two different secrets, because the gateway mints the first and queue-service the second. On top of the separate secrets each carries an `aud` claim (`seatrush:user`, `seatrush:admission`) that is demanded back, so one secret configured in both places still cannot turn an admission into an identity. The signing algorithm is compared to a constant rather than read out of the token, and expiry is checked against the injected clock with no tolerance for skew: the admission TTL also scores the slot in `active:{evt:<id>}`, and a token outliving its slot would be a buyer nobody is counting.
 - **Rate limiting**: token bucket per user and per IP on queue join, holds and orders.
 - **Anti-hoarding**: one active hold per user per event, max seats per hold.
 - **Signed tickets**: ticket payload (`ticketId, eventId, seatId, issuedAt`) signed with Ed25519 by order-service, verifiable offline at the venue entrance.
@@ -1072,8 +1073,11 @@ Main properties (all overridable via environment variables):
 | `seatrush.reconciler.batch-size` | inventory | `500` | Frozen holds examined per event per pass |
 | `seatrush.admission.rate-per-second` | queue | `500` | Users admitted per second per event |
 | `seatrush.admission.max-active-users` | queue | `5000` | Max users concurrently admitted |
-| `seatrush.admission.token-ttl` | queue | `10m` | Admission token lifetime |
+| `seatrush.admission.token-ttl` | queue, gateway | `10m` | Admission token lifetime, which is also how long the slot in `active:{evt:<id>}` is held |
+| `seatrush.admission.secret` | queue, gateway | none | Base64 HS256 secret (>= 32 bytes) admission tokens are signed with; a throwaway one is generated when unset |
 | `seatrush.queue.position-update-interval` | queue | `3s` | SSE position update period |
+| `seatrush.auth.secret` | gateway | none | Base64 HS256 secret (>= 32 bytes) user JWTs are signed with; a throwaway one is generated when unset |
+| `seatrush.auth.token-ttl` | gateway | `1h` | User JWT lifetime |
 | `seatrush.checkout.timeout` | order | `2m` | SAGA deadline before the pivot |
 | `seatrush.checkout.capture-max-retries` | order | `10` | Capture retries after the pivot |
 | `seatrush.checkout.capture-backoff` | order | `1s` | Pause before the first capture retry |
@@ -1159,6 +1163,7 @@ ADRs live in `docs/adr/` using the format *Context → Decision → Consequences
 | 0011 | Redis Streams as outbox for events originating in Lua scripts |
 | 0012 | One active hold per user per event |
 | 0013 | Synchronous hold freeze at order creation |
+| 0014 | Admission as a signed bearer token instead of a lookup against queue-service |
 
 ## 26. Roadmap
 

@@ -15,9 +15,12 @@ import org.springframework.context.annotation.Bean;
 /**
  * Contributes the ticket signer to whichever service issues tickets (README section 13).
  *
- * <p>Today that is order-service alone, and the module is here rather than in it because the next
- * two things README section 20 puts in this module, the JWT of the gateway and the admission token
- * of the queue, are signatures with the same shape of problem and will want the same home.
+ * <p>Today that is order-service alone, and the module is shared rather than part of it because the
+ * other two signatures README section 20 puts here, the user JWT of the gateway and the admission
+ * token of the queue, are the same shape of problem. Those two arrive through {@link
+ * UserTokenConfiguration} and {@link AdmissionTokenConfiguration}, which a service imports rather
+ * than inherits: the warning below is worth reading, and printing it in services that sign nothing
+ * would be the surest way to make everybody stop reading it.
  *
  * <p>A service with no key configured gets a generated one and a warning that names the two things
  * it costs: tickets will not survive a restart, and a second pod will mint tickets the first cannot

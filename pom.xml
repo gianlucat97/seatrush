@@ -43,6 +43,10 @@
     <spring-boot.version>4.0.8</spring-boot.version>
     <testcontainers.version>2.0.5</testcontainers.version>
     <archunit.version>1.5.1</archunit.version>
+    <!-- JOSE for the user JWT and the admission token (README §13). Not managed by the Boot
+         BOM, and pinned to the version Spring Security 7.0.x brings in transitively, so the
+         gateway's resource server and libs/security share one implementation. -->
+    <nimbus-jose-jwt.version>10.4</nimbus-jose-jwt.version>
 
     <!-- Build plugins -->
     <maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
@@ -73,6 +77,11 @@
         <version>${testcontainers.version}</version>
         <type>pom</type>
         <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>com.nimbusds</groupId>
+        <artifactId>nimbus-jose-jwt</artifactId>
+        <version>${nimbus-jose-jwt.version}</version>
       </dependency>
       <dependency>
         <groupId>com.tngtech.archunit</groupId>
