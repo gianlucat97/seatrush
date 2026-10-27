@@ -177,10 +177,10 @@ Implements the lobby and the FIFO virtual waiting room.
 - **What opens the doors** is inventory reporting the event as `ON_SALE`, not this service's clock (ADR-0015). Inventory warms the seat map into Redis as part of that transition, so a lobby drained a second early by a local clock would put buyers in front of a sale that still refuses them. queue-service polls the catalog (`seatrush.queue.catalog-refresh-interval`) and keeps serving the last answer it got if inventory is unreachable, because the users waiting are precisely the ones whose sale is about to open.
 - **Shuffled in the service, not in Lua**: Redis makes `math.random` deterministic so that a replica replaying a script reaches the same state, which would turn the shuffle into a fixed permutation that merely looks fair. The order is produced with `SecureRandom` and passed in; `SREM` on the lobby set is the claim, so every pod may drain the same lobby at once without a leader and each user still gets exactly one sequence number.
 - **Sequence numbers**: each queued user receives a strictly increasing sequence number from `INCR` (no timestamp ties). The queue is a sorted set scored by sequence.
-- **Admission job**: runs every second, pops up to `rate-per-second` users (`ZPOPMIN`), but never lets more than `max-active-users` be inside the purchase area at the same time. It also stores the highest admitted sequence (`head`).
+- **Admission job**: runs every second, pops up to `rate-per-second` users (`ZPOPMIN`), but never lets more than `max-active-users` be inside the purchase area at the same time. It also stores the highest admitted sequence (`head`). Freeing the slots whose admission has expired happens in the same script as filling them, because the room to admit somebody is exactly what the freeing just made; there is therefore no interval during which the count of active buyers is known to be wrong. It runs on every pod with no leader: `ZPOPMIN` takes a user off the queue for exactly one caller, so pods share a batch rather than admitting a buyer twice, at the cost of the rate being per pod.
 - **Position**: computed as `mySeq - head` (O(1), no `ZRANK` on 200k entries). It is an upper bound that never increases; users who leave make it slightly pessimistic, which is acceptable.
-- **Estimated wait**: `position / observedAdmissionRate`, using a moving average of the actual admission rate.
-- **Admission token**: signed JWT with `userId`, `eventId`, short TTL, pushed over SSE and also retrievable with a polling endpoint (`GET .../queue/me`) for clients that lost the stream.
+- **Estimated wait**: `position / observedAdmissionRate`, using a moving average of the actual admission rate. The rate is measured from how far `head` moved between two passes rather than from what one pod admitted, so it is the rate of the whole deployment; the configured `rate-per-second` is only the fallback before anything has been observed, which is the right guess precisely then, because a purchase area that is still empty really is admitting at its ceiling.
+- **Admission token**: signed JWT with `userId`, `eventId`, short TTL, pushed over SSE and also retrievable with a polling endpoint (`GET .../queue/me`) for clients that lost the stream. It is **minted on read from the slot, never stored** (ADR-0016): the expiry it carries is the score of the slot in `active:{evt:<id>}`, so the two end at the same instant, and a client that missed a push, lost its stream or reloaded the page gets a working admission simply by asking again. A buyer whose admission has lapsed is still reported as `ADMITTED` and handed no token, which is what tells a client its time is up rather than leaving it to wonder why its token stopped working.
 - **Slot release**: an active slot is freed when the admission token expires (sorted set scored by expiry) or when the user's order reaches a terminal state (consumes `order.events`).
 - **Sold-out**: when inventory reports `EventSoldOut`, every waiting client receives a `SOLD_OUT` SSE message and the queue is closed.
 - Joining twice returns the existing position (idempotent join).
@@ -973,7 +973,7 @@ seatrush/
 ├── services/
 │   ├── gateway/
 │   ├── queue-service/
-│   │   └── src/main/resources/redis/   # Lua scripts (join, leave, openLobby, admit)
+│   │   └── src/main/resources/redis/   # Lua scripts (join, leave, openLobby, admit, place)
 │   ├── inventory-service/
 │   │   └── src/main/resources/redis/   # Lua scripts (hold, release, expire, freeze, markSold)
 │   ├── order-service/
@@ -1074,7 +1074,8 @@ Main properties (all overridable via environment variables):
 | `seatrush.reconciler.interval` | inventory | `30s` | Redis/Postgres reconciliation period |
 | `seatrush.reconciler.batch-size` | inventory | `500` | Frozen holds examined per event per pass |
 | `seatrush.admission.rate-per-second` | queue | `500` | Users admitted per second per event |
-| `seatrush.admission.max-active-users` | queue | `5000` | Max users concurrently admitted |
+| `seatrush.admission.max-active-users` | queue | `5000` | Max users concurrently admitted, per pod |
+| `seatrush.admission.interval` | queue | `1s` | How often the door is opened and expired slots are freed |
 | `seatrush.admission.token-ttl` | queue, gateway | `10m` | Admission token lifetime, which is also how long the slot in `active:{evt:<id>}` is held |
 | `seatrush.admission.secret` | queue, gateway | none | Base64 HS256 secret (>= 32 bytes) admission tokens are signed with; a throwaway one is generated when unset |
 | `seatrush.queue.position-update-interval` | queue | `3s` | SSE position update period |
@@ -1170,6 +1171,7 @@ ADRs live in `docs/adr/` using the format *Context → Decision → Consequences
 | 0013 | Synchronous hold freeze at order creation |
 | 0014 | Admission as a signed bearer token instead of a lookup against queue-service |
 | 0015 | The lobby opens on inventory's sale status, never on queue-service's own clock |
+| 0016 | Admission tokens minted on read from the slot that backs them, never stored |
 
 ## 26. Roadmap
 

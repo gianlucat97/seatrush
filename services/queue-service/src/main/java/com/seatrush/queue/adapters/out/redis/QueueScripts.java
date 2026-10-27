@@ -35,6 +35,10 @@ public class QueueScripts {
       RedisScript.of(new ClassPathResource("redis/leave.lua"), Long.class);
   private final RedisScript<Long> openLobby =
       RedisScript.of(new ClassPathResource("redis/openLobby.lua"), Long.class);
+  private final RedisScript<String> admit =
+      RedisScript.of(new ClassPathResource("redis/admit.lua"), String.class);
+  private final RedisScript<String> place =
+      RedisScript.of(new ClassPathResource("redis/place.lua"), String.class);
 
   private final StringRedisTemplate redis;
 
@@ -54,11 +58,19 @@ public class QueueScripts {
     return openLobby;
   }
 
+  public RedisScript<String> admit() {
+    return admit;
+  }
+
+  public RedisScript<String> place() {
+    return place;
+  }
+
   /** Compiles every script on the server, failing the startup if one of them is broken. */
   @EventListener(ApplicationReadyEvent.class)
   public void loadScripts() {
     try {
-      for (RedisScript<?> script : List.of(join, leave, openLobby)) {
+      for (RedisScript<?> script : List.of(join, leave, openLobby, admit, place)) {
         String digest =
             redis.execute(
                 (RedisCallback<String>)
@@ -69,7 +81,7 @@ public class QueueScripts {
                                 script.getScriptAsString().getBytes(StandardCharsets.UTF_8)));
         log.debug("loaded a waiting room script as {}", digest);
       }
-      log.info("the three scripts of the waiting room are compiled on Redis");
+      log.info("the five scripts of the waiting room are compiled on Redis");
     } catch (RedisConnectionFailureException notUpYet) {
       log.warn(
           "Redis is not reachable, the waiting room scripts will be sent on first use", notUpYet);

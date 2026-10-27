@@ -2,8 +2,8 @@ package com.seatrush.queue.adapters.in.web;
 
 import com.seatrush.queue.application.QueueService;
 import com.seatrush.queue.application.SaleCalendar;
+import com.seatrush.queue.application.WaitingPlace;
 import com.seatrush.queue.domain.NotWaitingException;
-import com.seatrush.queue.domain.QueuePlace;
 import java.time.Instant;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -27,9 +27,10 @@ import org.springframework.web.bind.annotation.RestController;
  * gateway and one sent straight to this service hit the same path and no rewrite rule has to be
  * kept in step with the controllers.
  *
- * <p>The SSE stream of the same section arrives with the admission job that has something to push.
- * {@code GET .../queue/me} is here from the start because it is not only a fallback: it is what a
- * client that lost its stream reads to find out where it now stands.
+ * <p>The SSE stream of the same section arrives with the feature that can push; this one answers
+ * the same thing on request. {@code GET .../queue/me} is not only a fallback either: it is what a
+ * client that lost its stream reads to find out where it now stands, and it is where an admitted
+ * buyer gets the token to go shopping with.
  */
 @RestController
 @RequestMapping("/api/events/{eventId}/queue")
@@ -58,17 +59,16 @@ public class QueueController {
   @PostMapping
   public QueuePlaceResponse join(
       @PathVariable UUID eventId, @RequestHeader("X-User-Id") UUID userId) {
-    QueuePlace place = queue.join(eventId, userId);
-    return QueuePlaceResponse.of(place, onSaleAtOf(eventId));
+    return QueuePlaceResponse.of(queue.join(eventId, userId), onSaleAtOf(eventId));
   }
 
   /** Where the caller stands, for a client that has no stream or just lost one. */
   @GetMapping("/me")
   public QueuePlaceResponse me(
       @PathVariable UUID eventId, @RequestHeader("X-User-Id") UUID userId) {
-    QueuePlace place =
+    WaitingPlace waiting =
         queue.place(eventId, userId).orElseThrow(() -> new NotWaitingException(eventId, userId));
-    return QueuePlaceResponse.of(place, onSaleAtOf(eventId));
+    return QueuePlaceResponse.of(waiting, onSaleAtOf(eventId));
   }
 
   /**

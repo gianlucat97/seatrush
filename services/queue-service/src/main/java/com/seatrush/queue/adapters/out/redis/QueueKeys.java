@@ -60,4 +60,19 @@ public final class QueueKeys {
   public static String userSequence(UUID eventId, UUID userId) {
     return "queue:" + tag(eventId) + ":user:" + userId;
   }
+
+  /**
+   * ZSET: the buyers inside the purchase area, scored by the instant each admission expires.
+   *
+   * <p>Scored by the expiry rather than by the admission, so that releasing the slots whose time is
+   * up is one range delete instead of a scan: that is the slot release of README section 6.2, and
+   * it is why the admission job can both free and fill in a single script.
+   *
+   * <p>Its size is the cap of {@code seatrush.admission.max-active-users}. That is the number that
+   * makes a flash on-sale bounded: the queue may be two hundred thousand long and inventory still
+   * only ever sees this many buyers holding seats at once.
+   */
+  public static String active(UUID eventId) {
+    return "active:" + tag(eventId);
+  }
 }

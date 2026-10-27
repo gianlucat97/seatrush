@@ -36,6 +36,23 @@ seatrush:
     # Only how many users travel in one Lua call. The whole lobby is still shuffled as one,
     # because a shuffle of part of it would not be a shuffle.
     lobby-open-chunk-size: ${SEATRUSH_QUEUE_LOBBY_OPEN_CHUNK_SIZE:1000}
+  admission:
+    # The two numbers a waiting room exists for (README section 22). max-active-users is the one
+    # that protects the system: whatever the queue is, inventory never sees more buyers holding
+    # seats than this. rate-per-second only smooths the way in, so the cap is reached gradually
+    # instead of as a step the moment a sale opens. Both are per pod, because the job runs on
+    # every pod with no leader.
+    rate-per-second: ${SEATRUSH_ADMISSION_RATE_PER_SECOND:500}
+    max-active-users: ${SEATRUSH_ADMISSION_MAX_ACTIVE_USERS:5000}
+    # How often the door is opened, which is also how often expired slots are freed: both happen
+    # in one script, because the room to let somebody in is exactly what the freeing just made.
+    interval: ${SEATRUSH_ADMISSION_INTERVAL:1s}
+    # How long a buyer has in the purchase area. The same figure ends up in the admission token
+    # and scores the slot in active:{evt:<id>}, so the two die together.
+    token-ttl: ${SEATRUSH_ADMISSION_TOKEN_TTL:10m}
+    # The HS256 secret the token is signed with, shared with the gateway and nothing else. Left
+    # empty here, which makes the service generate one at startup and warn that it has.
+    secret: ${SEATRUSH_ADMISSION_SECRET:}
   inventory:
     # The catalog is read from inventory (README section 12.2). Both timeouts stay below the
     # refresh interval, so a hung read cannot pile one refresh on top of the next.

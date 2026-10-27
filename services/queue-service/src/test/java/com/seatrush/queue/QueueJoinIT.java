@@ -6,8 +6,8 @@ import com.seatrush.queue.adapters.out.redis.QueueKeys;
 import com.seatrush.queue.application.LobbyOpener;
 import com.seatrush.queue.application.QueueService;
 import com.seatrush.queue.application.SaleCalendar;
+import com.seatrush.queue.application.WaitingPlace;
 import com.seatrush.queue.domain.EventCatalog;
-import com.seatrush.queue.domain.QueuePlace;
 import com.seatrush.queue.domain.QueueState;
 import com.seatrush.queue.domain.SaleEvent;
 import com.seatrush.queue.domain.SaleStatus;
@@ -89,7 +89,7 @@ class QueueJoinIT {
     scheduled();
     UUID ada = UUID.randomUUID();
 
-    assertThat(queue.join(eventId, ada).state()).isEqualTo(QueueState.LOBBY);
+    assertThat(queue.join(eventId, ada).place().state()).isEqualTo(QueueState.LOBBY);
 
     assertThat(redis.opsForSet().members(QueueKeys.lobby(eventId))).containsExactly(ada.toString());
     assertThat(redis.opsForZSet().size(QueueKeys.queue(eventId))).isZero();
@@ -102,9 +102,9 @@ class QueueJoinIT {
   void numbersArrivalsAtALiveSaleInOrder() {
     onSale();
 
-    assertThat(queue.join(eventId, UUID.randomUUID()).position()).isEqualTo(1);
-    assertThat(queue.join(eventId, UUID.randomUUID()).position()).isEqualTo(2);
-    assertThat(queue.join(eventId, UUID.randomUUID()).position()).isEqualTo(3);
+    assertThat(queue.join(eventId, UUID.randomUUID()).place().position()).isEqualTo(1);
+    assertThat(queue.join(eventId, UUID.randomUUID()).place().position()).isEqualTo(2);
+    assertThat(queue.join(eventId, UUID.randomUUID()).place().position()).isEqualTo(3);
   }
 
   /** README section 6.2 by name: joining twice returns the existing position. */
@@ -112,7 +112,7 @@ class QueueJoinIT {
   void givesBackTheSamePlaceHoweverOftenAUserAsks() {
     onSale();
     UUID ada = UUID.randomUUID();
-    QueuePlace first = queue.join(eventId, ada);
+    WaitingPlace first = queue.join(eventId, ada);
 
     for (int again = 0; again < 5; again++) {
       assertThat(queue.join(eventId, ada)).isEqualTo(first);
@@ -145,7 +145,7 @@ class QueueJoinIT {
     queue.join(eventId, ada);
 
     onSale();
-    assertThat(queue.join(eventId, ada).state()).isEqualTo(QueueState.QUEUED);
+    assertThat(queue.join(eventId, ada).place().state()).isEqualTo(QueueState.QUEUED);
 
     assertThat(redis.opsForSet().size(QueueKeys.lobby(eventId))).isZero();
     assertThat(redis.opsForZSet().score(QueueKeys.queue(eventId), ada.toString())).isEqualTo(1.0);
@@ -157,14 +157,17 @@ class QueueJoinIT {
     UUID ada = UUID.randomUUID();
     queue.join(eventId, ada);
 
-    assertThat(queue.place(eventId, ada)).get().extracting(QueuePlace::position).isEqualTo(1L);
+    assertThat(queue.place(eventId, ada))
+        .get()
+        .extracting(place -> place.place().position())
+        .isEqualTo(1L);
 
     // What the admission job of the next feature will do: move the head.
     redis.opsForValue().set(QueueKeys.head(eventId), "1");
 
     assertThat(queue.place(eventId, ada))
         .get()
-        .extracting(QueuePlace::state)
+        .extracting(place -> place.place().state())
         .isEqualTo(QueueState.ADMITTED);
   }
 
@@ -176,7 +179,7 @@ class QueueJoinIT {
 
     assertThat(queue.place(eventId, ada))
         .get()
-        .extracting(QueuePlace::state)
+        .extracting(place -> place.place().state())
         .isEqualTo(QueueState.LOBBY);
     assertThat(queue.place(eventId, UUID.randomUUID())).isEmpty();
   }
@@ -204,7 +207,7 @@ class QueueJoinIT {
     queue.join(eventId, UUID.randomUUID());
     queue.leave(eventId, ada);
 
-    assertThat(queue.join(eventId, ada).position()).isEqualTo(3);
+    assertThat(queue.join(eventId, ada).place().position()).isEqualTo(3);
   }
 
   @Test
@@ -256,14 +259,14 @@ class QueueJoinIT {
   void neverNumbersAUserWhoAlreadyHasANumber() {
     onSale();
     UUID ada = UUID.randomUUID();
-    long sequence = queue.join(eventId, ada).sequence();
+    long sequence = queue.join(eventId, ada).place().sequence();
     redis.opsForSet().add(QueueKeys.lobby(eventId), ada.toString());
 
     opener.open(calendar.event(eventId));
 
     assertThat(queue.place(eventId, ada))
         .get()
-        .extracting(QueuePlace::sequence)
+        .extracting(place -> place.place().sequence())
         .isEqualTo(sequence);
     assertThat(redis.opsForSet().size(QueueKeys.lobby(eventId))).isZero();
   }
@@ -277,10 +280,15 @@ class QueueJoinIT {
     onSale();
     List<UUID> users = IntStream.range(0, 1_000).mapToObj(i -> UUID.randomUUID()).toList();
 
-    List<QueuePlace> places = inParallel(users.stream().map(this::joining).toList());
+    List<WaitingPlace> places = inParallel(users.stream().map(this::joining).toList());
 
-    assertThat(places).extracting(QueuePlace::sequence).doesNotHaveDuplicates().hasSize(1_000);
-    assertThat(places).extracting(QueuePlace::sequence).containsAll(sequencesFromOneTo(1_000));
+    assertThat(places)
+        .extracting(place -> place.place().sequence())
+        .doesNotHaveDuplicates()
+        .hasSize(1_000);
+    assertThat(places)
+        .extracting(place -> place.place().sequence())
+        .containsAll(sequencesFromOneTo(1_000));
     assertThat(redis.opsForZSet().size(QueueKeys.queue(eventId))).isEqualTo(1_000);
   }
 
@@ -290,10 +298,10 @@ class QueueJoinIT {
     onSale();
     UUID ada = UUID.randomUUID();
 
-    List<QueuePlace> places =
+    List<WaitingPlace> places =
         inParallel(IntStream.range(0, 1_000).mapToObj(i -> joining(ada)).toList());
 
-    assertThat(places).extracting(QueuePlace::sequence).containsOnly(1L);
+    assertThat(places).extracting(place -> place.place().sequence()).containsOnly(1L);
     assertThat(redis.opsForValue().get(QueueKeys.sequence(eventId))).isEqualTo("1");
   }
 
@@ -324,7 +332,7 @@ class QueueJoinIT {
     assertThat(redis.opsForSet().size(QueueKeys.lobby(eventId))).isZero();
   }
 
-  private Callable<QueuePlace> joining(UUID userId) {
+  private Callable<WaitingPlace> joining(UUID userId) {
     return () -> queue.join(eventId, userId);
   }
 
