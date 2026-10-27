@@ -55,9 +55,16 @@ class TicketRepositoryIT {
     PostgresSupport.registerProperties(registry, DATABASE);
   }
 
+  /**
+   * The whole foreign key graph in one statement, which is what Postgres requires: truncating
+   * {@code customer_order} alone is refused while {@code saga_instance} references it, empty or
+   * not. The same list as the other integration tests of this service, so there is one of it.
+   */
   @AfterEach
   void emptyTheTables() {
-    jdbc.sql("TRUNCATE ticket, order_item, customer_order").update();
+    jdbc.sql(
+            "TRUNCATE ticket, saga_instance, order_item, customer_order, outbox, processed_message")
+        .update();
   }
 
   @Test
