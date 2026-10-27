@@ -110,11 +110,43 @@ public class RedisSeatStateStore implements SeatStateStore {
     return Boolean.TRUE.equals(redis.hasKey(SeatKeys.seats(eventId)));
   }
 
+  /**
+   * The three counters that decide it, instead of the seat map it would take to count.
+   *
+   * <p>Exactly the condition {@code markSold.lua} applies on its way out, and the reason it is
+   * three reads rather than one is the same: a hold is not a seat anybody can still buy, but it is
+   * not a seat that is gone either, and the two sorted sets are what makes the held seats countable
+   * without looking at any of them.
+   *
+   * <p>It reaches into the hold keys of the same event although this store owns the seats. They
+   * share the hash tag and the question is about the seats: what is being asked is whether anything
+   * can still be taken, and a hold is the half of that answer the seat map alone cannot give.
+   *
+   * <p>Three round trips and no transaction, because this is the reconciler's safety net rather
+   * than the detection: the worst a race can do is leave a sale open until the next pass.
+   */
+  @Override
+  public boolean isSoldOut(UUID eventId) {
+    Objects.requireNonNull(eventId, "eventId must not be null");
+
+    String available = redis.opsForValue().get(SeatKeys.available(eventId));
+    return available != null
+        && Long.parseLong(available) == 0L
+        && isEmpty(SeatKeys.holdExpiry(eventId))
+        && isEmpty(SeatKeys.holdCheckout(eventId));
+  }
+
   @Override
   public void clear(UUID eventId) {
     Objects.requireNonNull(eventId, "eventId must not be null");
     redis.delete(
         List.of(SeatKeys.seats(eventId), SeatKeys.version(eventId), SeatKeys.available(eventId)));
+  }
+
+  /** Whether a sorted set of holds has nothing in it, a missing key included. */
+  private boolean isEmpty(String key) {
+    Long size = redis.opsForZSet().size(key);
+    return size == null || size == 0L;
   }
 
   private static List<Map<String, String>> encode(

@@ -22,6 +22,8 @@
 -- KEYS[4] userhold              the active hold of this user for this event
 -- KEYS[5] hold hash             the hold itself
 -- KEYS[6] seat events stream    what the relay forwards to Kafka
+-- KEYS[7] available counter     how many seats are still there to be taken
+-- KEYS[8] expiry sorted set     the ACTIVE holds, read only to see whether any are left
 --
 -- ARGV[1] holdId
 -- ARGV[2] orderId               the order the seats were sold to
@@ -29,7 +31,8 @@
 -- ARGV[4] stream maxlen
 -- ARGV[5] eventId
 --
--- Returns a JSON object whose status is OK, NOT_FOUND, ALREADY_SOLD or WRONG_STATE.
+-- Returns a JSON object whose status is OK, NOT_FOUND, ALREADY_SOLD or WRONG_STATE. An OK reply
+-- also says whether this sale was the one that sold the event out.
 
 local seats_key = KEYS[1]
 local version_key = KEYS[2]
@@ -37,6 +40,8 @@ local checkout_key = KEYS[3]
 local userhold_key = KEYS[4]
 local hold_key = KEYS[5]
 local stream_key = KEYS[6]
+local available_key = KEYS[7]
+local expiry_key = KEYS[8]
 
 local hold_id = ARGV[1]
 local order_id = ARGV[2]
@@ -107,10 +112,40 @@ redis.call('XADD', stream_key, 'MAXLEN', '~', stream_maxlen, '*',
   'version', version,
   'occurredAt', now)
 
+-- Whether that sale was the last one, which is a question only this script can answer: a sale is
+-- the one thing that takes a seat away for good, so an event becomes sold out here or not at all
+-- (README sections 6.3 and 9.2).
+--
+-- The condition is the one of section 9.2 read with three O(1) commands instead of a scan of the
+-- seat map: nothing available, no hold counting down and no hold in a checkout. The two sorted
+-- sets are what makes the held seats countable without looking at them, and this hold has already
+-- left the checkout one above. A held seat is deliberately not treated as gone: it may still be
+-- released, and announcing a sold out sale that then has seats again would be the worse mistake.
+local available = redis.call('GET', available_key)
+local sold_out = available ~= false
+  and tonumber(available) == 0
+  and redis.call('ZCARD', expiry_key) == 0
+  and redis.call('ZCARD', checkout_key) == 0
+
+if sold_out then
+  -- In the same step as the sale that caused it, which is what makes the announcement impossible
+  -- to lose: the relay forwards it to Kafka like any other seat event, and a pod dying between
+  -- the two would otherwise leave a sale nobody is ever told about. It names no seats and no
+  -- hold, because it is a fact about the event rather than a change to the seat map, and it
+  -- carries the version of the sale that closed it so a reader can place it in the sequence.
+  redis.call('XADD', stream_key, 'MAXLEN', '~', stream_maxlen, '*',
+    'type', 'EventSoldOut',
+    'eventId', event_id,
+    'seats', '',
+    'version', version,
+    'occurredAt', now)
+end
+
 return cjson.encode({
   status = 'OK',
   holdId = hold_id,
   orderId = order_id,
   version = version,
-  soldSeats = sold
+  soldSeats = sold,
+  soldOut = sold_out
 })

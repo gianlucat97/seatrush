@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.seatrush.common.id.IdGenerator;
 import com.seatrush.common.id.UuidV7Generator;
+import com.seatrush.inventory.domain.Event;
+import com.seatrush.inventory.domain.EventStatus;
 import com.seatrush.inventory.domain.Hold;
 import com.seatrush.inventory.domain.HoldStatus;
 import com.seatrush.inventory.domain.MarkSoldResult;
@@ -55,6 +57,8 @@ class CheckoutCommandServiceTest {
   private final MessageFactory messages = new MessageFactory(ids, clock);
   private final InMemoryHolds holds = new InMemoryHolds();
   private final InMemoryCatalog catalog = new InMemoryCatalog();
+  private final InMemorySeatState seatState = new InMemorySeatState();
+  private final SaleCloser saleCloser = new SaleCloser(catalog, seatState);
   private final RecordingOutboxStore outboxStore = new RecordingOutboxStore(clock);
   private final InMemoryProcessedMessages processed = new InMemoryProcessedMessages();
   private final DirectTransactionManager transactionManager = new DirectTransactionManager();
@@ -64,6 +68,7 @@ class CheckoutCommandServiceTest {
       new CheckoutCommandService(
           holds,
           catalog,
+          saleCloser,
           new IdempotentConsumer(new TransactionTemplate(transactionManager), processed, meters),
           new Outbox(outboxStore, codec),
           messages,
@@ -79,6 +84,32 @@ class CheckoutCommandServiceTest {
     assertThat(catalog.findSeatIdsOfOrder(EVENT_ID, ORDER_ID)).containsExactlyElementsOf(SEATS);
     assertThat(replies()).containsExactly(new SeatsCommitted(ORDER_ID, EVENT_ID, SEATS));
     assertThat(meters.counter("seatrush.seats.sold").count()).isEqualTo(2.0);
+  }
+
+  /**
+   * A sale the script reported as the last one closes the event, right after the step that made it
+   * true: the announcement on the seat event stream was written by that same step, so the two
+   * halves of a sold out sale cannot disagree.
+   */
+  @Test
+  void closesTheSaleWhenTheLastSeatOfTheEventIsSold() {
+    catalog.insert(anEventOnSale(), List.of());
+    holds.storeFrozen(hold(HoldStatus.CHECKOUT, ORDER_ID));
+    holds.sellsTheEventOut();
+
+    commands.commit(commitCommand());
+
+    assertThat(catalog.findById(EVENT_ID).orElseThrow().status()).isEqualTo(EventStatus.SOLD_OUT);
+  }
+
+  @Test
+  void leavesTheSaleOpenWhenThereAreSeatsLeft() {
+    catalog.insert(anEventOnSale(), List.of());
+    holds.storeFrozen(hold(HoldStatus.CHECKOUT, ORDER_ID));
+
+    commands.commit(commitCommand());
+
+    assertThat(catalog.findById(EVENT_ID).orElseThrow().status()).isEqualTo(EventStatus.ON_SALE);
   }
 
   /** The books first, the seat map second, and only after the transaction committed. */
@@ -256,6 +287,10 @@ class CheckoutCommandServiceTest {
   private Hold hold(HoldStatus status, UUID orderId) {
     return new Hold(
         HOLD_ID, EVENT_ID, USER_ID, SEATS, NOW.plus(Duration.ofMinutes(5)), status, orderId);
+  }
+
+  private Event anEventOnSale() {
+    return new Event(EVENT_ID, "Final", NOW, EventStatus.ON_SALE, NOW);
   }
 
   private MessageEnvelope<CommitSeats> commitCommand() {

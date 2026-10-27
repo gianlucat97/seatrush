@@ -12,8 +12,17 @@ import java.util.UUID;
  */
 public sealed interface MarkSoldResult {
 
-  /** The seat map now says sold, and moved to {@code version}. */
-  record Sold(long version, int soldSeats) implements MarkSoldResult {
+  /**
+   * The seat map now says sold, and moved to {@code version}.
+   *
+   * <p>{@code soldOut} is the one outcome of a sale that is about the event rather than about the
+   * hold: this sale took the last seat the event had, so there is nothing left to sell. It is
+   * decided inside the script, because the only honest instant to ask the question is the one in
+   * which the seats changed hands, and only a sale can make the answer yes.
+   *
+   * @param soldOut whether the event has nothing available and nothing held any more
+   */
+  record Sold(long version, int soldSeats, boolean soldOut) implements MarkSoldResult {
 
     public Sold {
       if (version <= 0) {

@@ -19,6 +19,7 @@ record ScriptReply(
     Long expiresAt,
     Integer freedSeats,
     Integer soldSeats,
+    Boolean soldOut,
     String holdStatus,
     List<String> seatIds,
     List<String> conflictingSeatIds,
@@ -50,6 +51,17 @@ record ScriptReply(
 
   int soldSeatsOrZero() {
     return soldSeats == null ? 0 : soldSeats;
+  }
+
+  /**
+   * Whether the sale this reply describes left the event with nothing to sell.
+   *
+   * <p>Absent reads as no, which is the only safe direction: a reply from a script that does not
+   * answer the question has not seen an event sell out, and closing a sale that still has seats
+   * would turn buyers away from them.
+   */
+  boolean soldOutOrFalse() {
+    return soldOut != null && soldOut;
   }
 
   /** The seats the script confirmed, falling back to the ones that were asked for. */
