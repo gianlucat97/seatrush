@@ -64,7 +64,7 @@ public class OrderController {
     return ResponseEntity.accepted().location(locationOf(order.id())).body(OrderResponse.of(order));
   }
 
-  /** One order with its items and total, for its owner only. */
+  /** One order with its items, total and, once it is confirmed, its tickets, for its owner. */
   @GetMapping("/{orderId}")
   public OrderResponse details(
       @PathVariable UUID orderId, @RequestHeader("X-User-Id") UUID userId) {

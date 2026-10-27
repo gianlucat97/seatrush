@@ -33,6 +33,8 @@ import com.seatrush.order.domain.SagaInstance;
 import com.seatrush.order.domain.SagaRepository;
 import com.seatrush.order.domain.SagaStatus;
 import com.seatrush.order.domain.SagaStep;
+import com.seatrush.order.domain.Ticket;
+import com.seatrush.security.tickets.TicketSigner;
 import com.seatrush.testsupport.containers.KafkaSupport;
 import com.seatrush.testsupport.containers.PostgresSupport;
 import com.seatrush.testsupport.time.MutableClock;
@@ -90,6 +92,7 @@ class SagaIT {
   private static final Duration TIMEOUT = Duration.ofMinutes(2);
   private static final Duration PATIENCE = Duration.ofSeconds(30);
   private static final UUID EVENT_ID = UUID.fromString("0199c5f0-2222-7000-8000-00000000b002");
+  private static final List<String> SEATS = List.of("A-1-1", "A-1-2");
 
   private static StubInventoryServer inventory;
 
@@ -103,6 +106,12 @@ class SagaIT {
   @Autowired private MessageFactory messages;
   @Autowired private MutableClock clock;
   @Autowired private JdbcClient jdbc;
+
+  /**
+   * The signer the application context built, which with nothing configured is a pair generated at
+   * startup: enough to prove a ticket verifies against the key that signed it.
+   */
+  @Autowired private TicketSigner signer;
 
   private UUID userId;
   private UUID holdId;
@@ -141,7 +150,7 @@ class SagaIT {
     clock.setTo(NOW);
     userId = UUID.randomUUID();
     holdId = UUID.randomUUID();
-    inventory.freezes(holdId, EVENT_ID, userId, 4500L, "A-1-1", "A-1-2");
+    inventory.freezes(holdId, EVENT_ID, userId, 4500L, SEATS.toArray(String[]::new));
     orderId = checkouts.start(new StartCheckoutCommand(userId, holdId, UUID.randomUUID())).id();
   }
 
@@ -173,6 +182,16 @@ class SagaIT {
     assertThat(saga().step()).isEqualTo(SagaStep.DONE);
     assertThat(sentOn(Topics.ORDER_EVENTS))
         .containsExactly(new OrderConfirmed(orderId, userId, EVENT_ID));
+    assertThat(tickets())
+        .as("a confirmed order has one ticket per seat (README section 13)")
+        .extracting(Ticket::seatId)
+        .containsExactlyElementsOf(SEATS);
+    assertThat(tickets())
+        .allSatisfy(
+            ticket ->
+                assertThat(signer.verify(ticket.signedPayload()).seatId())
+                    .as("and every one of them verifies against the key this service signs with")
+                    .isEqualTo(ticket.seatId()));
   }
 
   @Test
@@ -361,7 +380,11 @@ class SagaIT {
   }
 
   private Order order() {
-    return orders.get(orderId, userId);
+    return orders.get(orderId, userId).order();
+  }
+
+  private List<Ticket> tickets() {
+    return orders.get(orderId, userId).tickets();
   }
 
   private SagaInstance saga() {

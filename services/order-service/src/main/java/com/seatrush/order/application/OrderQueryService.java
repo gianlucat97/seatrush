@@ -4,6 +4,8 @@ import com.seatrush.order.domain.Order;
 import com.seatrush.order.domain.OrderNotFoundException;
 import com.seatrush.order.domain.OrderNotOwnedException;
 import com.seatrush.order.domain.OrderRepository;
+import com.seatrush.order.domain.OrderStatus;
+import com.seatrush.order.domain.TicketRepository;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -28,28 +30,41 @@ public class OrderQueryService {
   public static final int MAX_PAGE_SIZE = 100;
 
   private final OrderRepository orders;
+  private final TicketRepository tickets;
 
-  public OrderQueryService(OrderRepository orders) {
+  public OrderQueryService(OrderRepository orders, TicketRepository tickets) {
     this.orders = orders;
+    this.tickets = tickets;
   }
 
   /**
-   * One order, for its owner.
+   * One order with its tickets, for its owner (README section 12.5).
+   *
+   * <p>The tickets are read only for a confirmed order, because only a confirmed order has any:
+   * everything before the capture is a checkout in progress, and querying for rows that cannot
+   * exist yet would be a second round trip on every poll of a client watching a countdown.
    *
    * @throws OrderNotFoundException if there is no such order
    * @throws OrderNotOwnedException if it belongs to another user
    */
   @Transactional(readOnly = true)
-  public Order get(UUID orderId, UUID callerId) {
+  public OrderDetails get(UUID orderId, UUID callerId) {
     Order order = orders.findById(orderId).orElseThrow(() -> new OrderNotFoundException(orderId));
     if (!order.belongsTo(callerId)) {
       throw new OrderNotOwnedException(orderId);
     }
-    return order;
+    if (order.status() != OrderStatus.CONFIRMED) {
+      return OrderDetails.withoutTickets(order);
+    }
+    return new OrderDetails(order, tickets.findByOrderId(orderId));
   }
 
   /**
    * One page of the caller's own orders, newest first.
+   *
+   * <p>Without tickets, deliberately. README section 12.5 puts them on the single order, and a page
+   * of twenty would otherwise mean twenty more queries for a signed string nobody reads from a
+   * list: a client that wants a ticket already has to open the order it belongs to.
    *
    * @param before the {@code createdAt} of the last order of the previous page, or null to start
    * @param limit how many to return, defaulted and capped
