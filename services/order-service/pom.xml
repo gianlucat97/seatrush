@@ -28,6 +28,12 @@
       <artifactId>seatrush-messaging</artifactId>
       <version>${project.version}</version>
     </dependency>
+    <!-- The Ed25519 signing of README section 13: this is the service that issues tickets. -->
+    <dependency>
+      <groupId>com.seatrush</groupId>
+      <artifactId>seatrush-security</artifactId>
+      <version>${project.version}</version>
+    </dependency>
 
     <!-- The API of README section 12.5, and the RestClient the freeze call goes out on. -->
     <dependency>

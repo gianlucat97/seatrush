@@ -58,6 +58,9 @@ import org.springframework.stereotype.Service;
  * retried until it works, because the seats are sold and there is nothing left to give back. That
  * is the whole reason the deadline is cleared when the commit goes out: a timeout firing while the
  * commit was succeeding would try to compensate something that cannot be compensated.
+ *
+ * <p>The tickets are the last thing the forward half writes, in the same transaction as the
+ * confirmation (README section 13), so a confirmed order always has them.
  */
 @Service
 public class CheckoutSaga {
@@ -66,6 +69,7 @@ public class CheckoutSaga {
 
   private final OrderRepository orders;
   private final SagaRepository sagas;
+  private final TicketIssuer tickets;
   private final IdempotentConsumer consumer;
   private final Outbox outbox;
   private final MessageFactory messages;
@@ -76,6 +80,7 @@ public class CheckoutSaga {
   public CheckoutSaga(
       OrderRepository orders,
       SagaRepository sagas,
+      TicketIssuer tickets,
       IdempotentConsumer consumer,
       Outbox outbox,
       MessageFactory messages,
@@ -84,6 +89,7 @@ public class CheckoutSaga {
       MeterRegistry meters) {
     this.orders = orders;
     this.sagas = sagas;
+    this.tickets = tickets;
     this.consumer = consumer;
     this.outbox = outbox;
     this.messages = messages;
@@ -154,11 +160,18 @@ public class CheckoutSaga {
   }
 
   /**
-   * The money is taken, which is the last thing a checkout waits for.
+   * The money is taken, which is the last thing a checkout waits for: issue the tickets.
    *
-   * <p>The order is confirmed without any ticket, because signing one needs a key this service does
-   * not have yet. A confirmed order with no tickets is a confirmed order: the sale is a fact in
-   * inventory and the money is taken, and what is missing is the thing somebody carries to a gate.
+   * <p>The tickets are signed inside this transaction, alongside the status and the {@code
+   * OrderConfirmed} that announces it. There is no step between {@code SEATS_COMMITTED} and {@code
+   * CONFIRMED} for them, and that is on purpose: a separate transaction afterwards would leave a
+   * window in which a user is told their purchase succeeded and {@code GET /api/orders/{id}}
+   * answers with nothing to carry to a gate, and the pod could die in it.
+   *
+   * <p>Signing is the one piece of work here that is neither a query nor a write, and it stays
+   * inside the transaction anyway. An Ed25519 signature is tens of microseconds for a handful of
+   * seats, which is cheaper than the round trip that moving it out would cost and far cheaper than
+   * the window it would open.
    */
   public void onPaymentCaptured(MessageEnvelope<PaymentCaptured> reply) {
     UUID orderId = reply.payload().orderId();
@@ -167,6 +180,7 @@ public class CheckoutSaga {
         orderId,
         SagaStep.AWAITING_CAPTURE,
         (envelope, saga, order) -> {
+          tickets.issueFor(order);
           move(order, OrderStatus.CONFIRMED, null);
           take(saga.completed());
           outbox.append(

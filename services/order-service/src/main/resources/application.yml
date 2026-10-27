@@ -74,6 +74,13 @@ seatrush:
     retries: ${SEATRUSH_CONSUMER_RETRIES:3}
     retry-backoff: ${SEATRUSH_CONSUMER_RETRY_BACKOFF:500ms}
     retry-max-backoff: ${SEATRUSH_CONSUMER_RETRY_MAX_BACKOFF:5s}
+  tickets:
+    # The Ed25519 pair tickets are signed with (README section 13). Base64 of a PKCS#8 private key
+    # and of the matching X.509 public key, which is what openssl writes. Deliberately with no
+    # default: a signing key in a repository is not a key, and a service with nothing configured
+    # generates a throwaway pair and warns about it, which is usable locally and nowhere else.
+    private-key: ${SEATRUSH_TICKETS_PRIVATE_KEY:}
+    public-key: ${SEATRUSH_TICKETS_PUBLIC_KEY:}
   outbox:
     # The Postgres outbox of README section 9.5, which seatrush-messaging contributes to every
     # service that owns a database. Both values are the defaults of README section 22 and are

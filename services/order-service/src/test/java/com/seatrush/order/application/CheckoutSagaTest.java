@@ -36,10 +36,15 @@ import com.seatrush.order.domain.OrderStatus;
 import com.seatrush.order.domain.SagaInstance;
 import com.seatrush.order.domain.SagaStatus;
 import com.seatrush.order.domain.SagaStep;
+import com.seatrush.order.domain.Ticket;
+import com.seatrush.security.tickets.TicketKeys;
+import com.seatrush.security.tickets.TicketPayload;
+import com.seatrush.security.tickets.TicketSigner;
 import com.seatrush.testsupport.time.MutableClock;
 import com.seatrush.testsupport.transaction.DirectTransactionManager;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.security.KeyPair;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -67,11 +72,14 @@ class CheckoutSagaTest {
   private static final List<String> SEATS = List.of("A-1-1", "A-1-2");
   private static final Money TOTAL = Money.of(9000L, "EUR");
 
+  private static final KeyPair KEYS = TicketKeys.generate();
+
   private final MutableClock clock = MutableClock.at(NOW);
   private final IdGenerator ids = new UuidV7Generator(clock);
   private final MessageCodec codec = new MessageCodec();
   private final MessageFactory messages = new MessageFactory(ids, clock);
   private final InMemoryOrders orders = new InMemoryOrders();
+  private final InMemoryTickets tickets = new InMemoryTickets();
   private final RecordingOutboxStore outboxStore = new RecordingOutboxStore(clock);
   private final InMemoryProcessedMessages processed = new InMemoryProcessedMessages();
   private final DirectTransactionManager transactionManager = new DirectTransactionManager();
@@ -84,6 +92,8 @@ class CheckoutSagaTest {
       new CheckoutSaga(
           orders,
           orders,
+          new TicketIssuer(
+              tickets, new TicketSigner(KEYS.getPrivate(), KEYS.getPublic()), ids, clock),
           new IdempotentConsumer(new TransactionTemplate(transactionManager), processed, meters),
           new Outbox(outboxStore, codec),
           messages,
@@ -131,6 +141,49 @@ class CheckoutSagaTest {
     assertThat(saga().status()).isEqualTo(SagaStatus.COMPLETED);
     assertThat(saga().step()).isEqualTo(SagaStep.DONE);
     assertThat(sent()).containsExactly(new OrderConfirmed(ORDER_ID, USER_ID, EVENT_ID));
+    assertThat(tickets.findByOrderId(ORDER_ID))
+        .as("a seat admits somebody, so there is one ticket per seat (README section 13)")
+        .extracting(Ticket::seatId)
+        .containsExactlyElementsOf(SEATS);
+  }
+
+  /**
+   * The tickets and the confirmation are one transaction, which is what this asserts from the
+   * outside: the status never exists without them.
+   */
+  @Test
+  void aConfirmedOrderNeverExistsWithoutItsTickets() {
+    aCheckoutAwaitingCapture();
+    assertThat(tickets.all()).isEmpty();
+
+    saga.onPaymentCaptured(captured());
+
+    assertThat(tickets.all()).hasSize(SEATS.size());
+    assertThat(tickets.all())
+        .allSatisfy(
+            ticket -> {
+              assertThat(ticket.orderId()).isEqualTo(ORDER_ID);
+              assertThat(ticket.eventId()).isEqualTo(EVENT_ID);
+              assertThat(ticket.issuedAt()).isEqualTo(clock.instant());
+            });
+  }
+
+  /** What a gate does: read the seat back out of the signature, with the public key alone. */
+  @Test
+  void issuesTicketsAGateCanVerifyOffline() {
+    aCheckoutAwaitingCapture();
+
+    saga.onPaymentCaptured(captured());
+
+    TicketSigner gate = new TicketSigner(TicketKeys.generate().getPrivate(), KEYS.getPublic());
+    assertThat(tickets.all())
+        .allSatisfy(
+            ticket -> {
+              TicketPayload verified = gate.verify(ticket.signedPayload());
+              assertThat(verified.ticketId()).isEqualTo(ticket.id());
+              assertThat(verified.eventId()).isEqualTo(EVENT_ID);
+              assertThat(verified.seatId()).isEqualTo(ticket.seatId());
+            });
   }
 
   @Test

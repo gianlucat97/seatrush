@@ -1088,6 +1088,8 @@ Main properties (all overridable via environment variables):
 | `seatrush.consumer.retries` | all | `3` | Redeliveries of a record before the DLQ |
 | `seatrush.consumer.retry-backoff` | all | `500ms` | Pause before the first redelivery |
 | `seatrush.consumer.retry-max-backoff` | all | `5s` | Ceiling the redelivery pause doubles up to |
+| `seatrush.tickets.private-key` | order | none | Base64 PKCS#8 Ed25519 key tickets are signed with; a throwaway pair is generated when unset |
+| `seatrush.tickets.public-key` | order | none | Base64 X.509 public half, which is what verifies a ticket |
 | `seatrush.stream-relay.poll-interval` | inventory | `100ms` | Seat event relay period |
 | `seatrush.stream-relay.batch-size` | inventory | `500` | Stream entries per relay pass |
 | `seatrush.stream-relay.claim-idle-after` | inventory | `30s` | Pending entries are claimed from a dead consumer after this |

@@ -13,6 +13,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.seatrush.common.money.Money;
 import com.seatrush.messaging.messages.FailureReason;
 import com.seatrush.order.application.CheckoutService;
+import com.seatrush.order.application.OrderDetails;
 import com.seatrush.order.application.OrderQueryService;
 import com.seatrush.order.domain.HoldAlreadyUsedException;
 import com.seatrush.order.domain.HoldExpiredException;
@@ -25,6 +26,7 @@ import com.seatrush.order.domain.OrderItem;
 import com.seatrush.order.domain.OrderNotFoundException;
 import com.seatrush.order.domain.OrderNotOwnedException;
 import com.seatrush.order.domain.OrderStatus;
+import com.seatrush.order.domain.Ticket;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -46,6 +48,7 @@ class OrderControllerTest {
   private static final UUID USER_ID = UUID.fromString("0199c5f0-3333-7000-8000-00000000c003");
   private static final UUID HOLD_ID = UUID.fromString("0199c5f0-4444-7000-8000-00000000d004");
   private static final UUID KEY = UUID.fromString("0199c5f0-5555-7000-8000-00000000e005");
+  private static final UUID TICKET_ID = UUID.fromString("0199c5f0-7777-7000-8000-00000000f007");
   private static final Instant CREATED_AT = Instant.parse("2026-06-01T10:00:00Z");
   private static final Money SEAT = Money.of(4500L, "EUR");
 
@@ -171,7 +174,8 @@ class OrderControllerTest {
 
   @Test
   void answersWithAnOrderToItsOwner() throws Exception {
-    given(orders.get(any(), any())).willReturn(order(OrderStatus.CONFIRMED, null));
+    given(orders.get(any(), any()))
+        .willReturn(OrderDetails.withoutTickets(order(OrderStatus.CONFIRMED, null)));
 
     mvc.perform(get("/api/orders/{orderId}", ORDER_ID).header("X-User-Id", USER_ID))
         .andExpect(status().isOk())
@@ -179,10 +183,51 @@ class OrderControllerTest {
         .andExpect(jsonPath("$.failureReason").doesNotExist());
   }
 
+  /** README section 12.5: a confirmed order carries what somebody takes to the gate. */
+  @Test
+  void aConfirmedOrderCarriesItsTickets() throws Exception {
+    Order confirmed = order(OrderStatus.CONFIRMED, null);
+    given(orders.get(any(), any()))
+        .willReturn(
+            new OrderDetails(
+                confirmed,
+                List.of(
+                    new Ticket(
+                        TICKET_ID,
+                        ORDER_ID,
+                        EVENT_ID,
+                        "A-1-1",
+                        "v1.payload.signature",
+                        CREATED_AT))));
+
+    mvc.perform(get("/api/orders/{orderId}", ORDER_ID).header("X-User-Id", USER_ID))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.tickets", Matchers.hasSize(1)))
+        .andExpect(jsonPath("$.tickets[0].ticketId").value(TICKET_ID.toString()))
+        .andExpect(jsonPath("$.tickets[0].seatId").value("A-1-1"))
+        .andExpect(jsonPath("$.tickets[0].signedPayload").value("v1.payload.signature"))
+        .andExpect(jsonPath("$.tickets[0].issuedAt").value(CREATED_AT.toString()));
+  }
+
+  /**
+   * Absent and not an empty array, which is the whole reason the field is {@code NON_NULL}: a
+   * client watching a countdown can tell "not issued yet" from "issued, none".
+   */
+  @Test
+  void anOrderStillCheckingOutCarriesNoTicketField() throws Exception {
+    given(orders.get(any(), any()))
+        .willReturn(OrderDetails.withoutTickets(order(OrderStatus.PENDING, null)));
+
+    mvc.perform(get("/api/orders/{orderId}", ORDER_ID).header("X-User-Id", USER_ID))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.tickets").doesNotExist());
+  }
+
   @Test
   void aFailedOrderSaysWhy() throws Exception {
     given(orders.get(any(), any()))
-        .willReturn(order(OrderStatus.FAILED, FailureReason.PAYMENT_DECLINED));
+        .willReturn(
+            OrderDetails.withoutTickets(order(OrderStatus.FAILED, FailureReason.PAYMENT_DECLINED)));
 
     mvc.perform(get("/api/orders/{orderId}", ORDER_ID).header("X-User-Id", USER_ID))
         .andExpect(jsonPath("$.status").value("FAILED"))

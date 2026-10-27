@@ -24,6 +24,7 @@
     <module>libs/common</module>
     <module>libs/test-support</module>
     <module>libs/messaging</module>
+    <module>libs/security</module>
     <module>services/inventory-service</module>
     <module>services/order-service</module>
     <module>services/payment-service</module>

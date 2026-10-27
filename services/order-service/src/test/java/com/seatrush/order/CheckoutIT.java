@@ -139,7 +139,7 @@ class CheckoutIT {
     assertThat(order.eventId()).isEqualTo(EVENT_ID);
     assertThat(order.total()).isEqualTo(Money.of(9000L, "EUR"));
 
-    Order stored = orders.get(order.id(), userId);
+    Order stored = orders.get(order.id(), userId).order();
     assertThat(stored.seatIds()).containsExactly("A-1-1", "A-1-2");
     assertThat(stored.total()).isEqualTo(Money.of(9000L, "EUR"));
     assertThat(stored.createdAt()).isEqualTo(NOW);
