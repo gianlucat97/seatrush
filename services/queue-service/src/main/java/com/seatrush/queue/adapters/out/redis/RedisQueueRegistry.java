@@ -1,8 +1,11 @@
 package com.seatrush.queue.adapters.out.redis;
 
+import com.seatrush.queue.domain.AdmissionBatch;
+import com.seatrush.queue.domain.AdmitRequest;
 import com.seatrush.queue.domain.JoinRequest;
 import com.seatrush.queue.domain.QueuePlace;
 import com.seatrush.queue.domain.QueueRegistry;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -16,17 +19,19 @@ import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * The {@link QueueRegistry} on Redis: two Lua scripts for the writes and two reads around them.
+ * The {@link QueueRegistry} on Redis: five Lua scripts and one plain read beside them.
  *
- * <p>The scripts answer with JSON, which is what lets one call carry an outcome and the two
- * counters a position is made of. The mapper is private to this adapter: the protocol between this
- * class and the scripts is internal and must not change because the public API changed how it
- * writes JSON.
+ * <p>The scripts answer with JSON, which is what lets one call carry an outcome, the two counters a
+ * position is made of and the slot that may come with them. The mapper is private to this adapter:
+ * the protocol between this class and the scripts is internal and must not change because the
+ * public API changed how it writes JSON.
  *
- * <p>Reading a place is the one operation that is not a script, because it does not need to be: two
- * {@code GET}s of keys on the same slot, fetched together, and nothing is being changed. A user
- * whose sequence is read a microsecond before an admission moves the head is told they are one
- * place further back than they are, and will be told otherwise on their next poll.
+ * <p>Reading a place is a script as well, although it changes nothing. The facts it reads have to
+ * agree with each other, and the busiest read of a flash on-sale is worth one round trip rather
+ * than three; {@code place.lua} says the rest.
+ *
+ * <p>The one plain read left is the lobby, because the shuffle has to happen outside Redis anyway
+ * and reading a set is all that takes.
  */
 @Repository
 public class RedisQueueRegistry implements QueueRegistry {
@@ -37,7 +42,7 @@ public class RedisQueueRegistry implements QueueRegistry {
    * <p>There is one such key per user per sale, so without a ttl a benchmark of 200,000 users would
    * leave 200,000 keys behind for ever. A day is far longer than any sale: an on-sale is over in
    * minutes, and a key still untouched after twenty-four hours belongs to an event nobody is
-   * queueing for. The event level keys are four per sale and are left alone.
+   * queueing for. The event level keys are five per sale and are left alone.
    */
   static final long USER_SEQUENCE_TTL_SECONDS = 24 * 60 * 60L;
 
@@ -64,43 +69,68 @@ public class RedisQueueRegistry implements QueueRegistry {
             QueueKeys.queue(eventId),
             QueueKeys.sequence(eventId),
             QueueKeys.head(eventId),
-            QueueKeys.userSequence(eventId, userId));
-    List<String> args =
-        List.of(
-            userId.toString(),
-            request.intoLobby() ? "1" : "0",
-            Long.toString(USER_SEQUENCE_TTL_SECONDS));
-
-    JoinReply reply = replyOf(redis.execute(scripts.join(), keys, args.toArray()));
-    return switch (reply.status()) {
-      case "LOBBY" -> QueuePlace.inLobby(eventId, userId);
-      case "SEQUENCED" ->
-          QueuePlace.withSequence(eventId, userId, reply.requireSequence(), reply.headOrZero());
-      default ->
-          throw new IllegalStateException("join.lua answered an unknown status " + reply.status());
+            QueueKeys.userSequence(eventId, userId),
+            QueueKeys.active(eventId));
+    Object[] args = {
+      userId.toString(),
+      request.intoLobby() ? "1" : "0",
+      Long.toString(USER_SEQUENCE_TTL_SECONDS),
+      Long.toString(request.now().toEpochMilli())
     };
+
+    PlaceReply reply = replyOf(redis.execute(scripts.join(), keys, args), "join.lua");
+    return placeOf(eventId, userId, reply)
+        .orElseThrow(() -> new IllegalStateException("join.lua put nobody anywhere"));
   }
 
   @Override
-  public Optional<QueuePlace> place(UUID eventId, UUID userId) {
+  public Optional<QueuePlace> place(UUID eventId, UUID userId, Instant now) {
     Objects.requireNonNull(eventId, "eventId must not be null");
     Objects.requireNonNull(userId, "userId must not be null");
+    Objects.requireNonNull(now, "now must not be null");
 
-    List<String> values =
-        redis
-            .opsForValue()
-            .multiGet(List.of(QueueKeys.userSequence(eventId, userId), QueueKeys.head(eventId)));
-    String sequence = values == null || values.isEmpty() ? null : values.get(0);
-    if (sequence == null) {
-      // No sequence: either in the lobby, or not waiting at all. The set answers which.
-      return Boolean.TRUE.equals(
-              redis.opsForSet().isMember(QueueKeys.lobby(eventId), userId.toString()))
-          ? Optional.of(QueuePlace.inLobby(eventId, userId))
-          : Optional.empty();
+    List<String> keys =
+        List.of(
+            QueueKeys.lobby(eventId),
+            QueueKeys.head(eventId),
+            QueueKeys.userSequence(eventId, userId),
+            QueueKeys.active(eventId));
+    Object[] args = {userId.toString(), Long.toString(now.toEpochMilli())};
+
+    return placeOf(
+        eventId, userId, replyOf(redis.execute(scripts.place(), keys, args), "place.lua"));
+  }
+
+  @Override
+  public AdmissionBatch admit(AdmitRequest request) {
+    Objects.requireNonNull(request, "request must not be null");
+    UUID eventId = request.eventId();
+
+    List<String> keys =
+        List.of(QueueKeys.queue(eventId), QueueKeys.active(eventId), QueueKeys.head(eventId));
+    Object[] args = {
+      Long.toString(request.now().toEpochMilli()),
+      Long.toString(request.admissionExpiresAt().toEpochMilli()),
+      Integer.toString(request.maxToAdmit()),
+      Integer.toString(request.maxActiveUsers())
+    };
+
+    String json = redis.execute(scripts.admit(), keys, args);
+    if (json == null) {
+      throw new IllegalStateException("admit.lua answered nothing");
     }
-    String head = values.size() > 1 ? values.get(1) : null;
-    return Optional.of(
-        QueuePlace.withSequence(eventId, userId, parse(sequence, "sequence"), headOf(head)));
+    AdmitReply reply;
+    try {
+      reply = REPLIES.readValue(json, AdmitReply.class);
+    } catch (JacksonException notAReply) {
+      throw new IllegalStateException("admit.lua answered " + json, notAReply);
+    }
+    return new AdmissionBatch(
+        eventId,
+        reply.admitted().stream().map(RedisQueueRegistry::userId).toList(),
+        reply.requireHead(),
+        reply.requireActiveUsers(),
+        reply.requireFreedSlots());
   }
 
   @Override
@@ -127,16 +157,7 @@ public class RedisQueueRegistry implements QueueRegistry {
     }
     List<UUID> users = new ArrayList<>(members.size());
     for (String member : members) {
-      try {
-        users.add(UUID.fromString(member));
-      } catch (IllegalArgumentException notAUserId) {
-        // Loud rather than skipped. Nothing this service writes could produce it, so either
-        // something else is writing to this key or the key format changed under a running
-        // deployment; both are worth a failed open and an alert rather than a quiet half lobby.
-        throw new IllegalStateException(
-            "the lobby of event " + eventId + " holds " + member + ", which is not a user id",
-            notAUserId);
-      }
+      users.add(userId(member));
     }
     return users;
   }
@@ -166,26 +187,48 @@ public class RedisQueueRegistry implements QueueRegistry {
     return queued == null ? 0 : queued.intValue();
   }
 
-  private static JoinReply replyOf(String json) {
+  /** The place one reply describes, which is nothing at all for a user who is not waiting. */
+  private static Optional<QueuePlace> placeOf(UUID eventId, UUID userId, PlaceReply reply) {
+    return switch (reply.status()) {
+      case PlaceReply.NONE -> Optional.empty();
+      case PlaceReply.LOBBY -> Optional.of(QueuePlace.inLobby(eventId, userId));
+      case PlaceReply.SEQUENCED ->
+          Optional.of(
+              QueuePlace.withSequence(
+                  eventId,
+                  userId,
+                  reply.requireSequence(),
+                  reply.headOrZero(),
+                  reply.admittedUntilOrNull()));
+      default ->
+          throw new IllegalStateException("a script answered an unknown status " + reply.status());
+    };
+  }
+
+  private static PlaceReply replyOf(String json, String script) {
     if (json == null) {
-      throw new IllegalStateException("join.lua answered nothing");
+      throw new IllegalStateException(script + " answered nothing");
     }
     try {
-      return REPLIES.readValue(json, JoinReply.class);
+      return REPLIES.readValue(json, PlaceReply.class);
     } catch (JacksonException notAReply) {
-      throw new IllegalStateException("join.lua answered " + json, notAReply);
+      throw new IllegalStateException(script + " answered " + json, notAReply);
     }
   }
 
-  private static long headOf(String head) {
-    return head == null ? 0 : parse(head, "head");
-  }
-
-  private static long parse(String value, String what) {
+  /**
+   * A member of one of these keys as a user id.
+   *
+   * <p>Loud rather than skipped. Nothing this service writes could produce anything else, so either
+   * something else is writing to these keys or the key format changed under a running deployment;
+   * both are worth a failure and an alert rather than a quietly half read waiting room.
+   */
+  private static UUID userId(String member) {
     try {
-      return Long.parseLong(value);
-    } catch (NumberFormatException notANumber) {
-      throw new IllegalStateException("the " + what + " of a queue is " + value, notANumber);
+      return UUID.fromString(member);
+    } catch (IllegalArgumentException notAUserId) {
+      throw new IllegalStateException(
+          "a waiting room holds " + member + ", which is not a user id", notAUserId);
     }
   }
 }

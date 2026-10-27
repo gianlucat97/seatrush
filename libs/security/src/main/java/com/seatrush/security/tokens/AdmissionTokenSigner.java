@@ -4,6 +4,7 @@ import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.JWTClaimsSet.Builder;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.UUID;
 import javax.crypto.spec.SecretKeySpec;
 
@@ -44,10 +45,38 @@ public final class AdmissionTokenSigner {
     return codec.ttl();
   }
 
-  /** An admission for a buyer the queue has just let through. */
+  /**
+   * An admission for a buyer the queue has just let through, lasting {@link #ttl()}.
+   *
+   * <p>For a caller with nothing of its own to line the expiry up with. queue-service uses {@link
+   * #issueUntil(UUID, UUID, Instant)} instead, because it has.
+   */
   public IssuedToken<AdmissionToken> issue(UUID userId, UUID eventId) {
-    JwtCodec.Signed signed =
-        codec.sign(userId, new Builder().claim(EVENT_CLAIM, eventId.toString()));
+    return tokenOf(
+        userId, eventId, codec.sign(userId, new Builder().claim(EVENT_CLAIM, eventId.toString())));
+  }
+
+  /**
+   * An admission that ends at an instant the queue has already written down.
+   *
+   * <p>The one the admission job calls. The instant it passes is the score of the buyer's slot in
+   * {@code active:{evt:<id>}}, so the token and the slot are not two readings of a clock taken a
+   * microsecond apart but the same instant used twice. A token that outlived its slot would be a
+   * buyer inside the purchase area that nothing is counting; one that died before it would send
+   * somebody back to the queue with their seats still held.
+   *
+   * @throws IllegalArgumentException if that instant is not in the future, which would mint a token
+   *     its own verifier refuses
+   */
+  public IssuedToken<AdmissionToken> issueUntil(UUID userId, UUID eventId, Instant expiresAt) {
+    return tokenOf(
+        userId,
+        eventId,
+        codec.signUntil(userId, new Builder().claim(EVENT_CLAIM, eventId.toString()), expiresAt));
+  }
+
+  private static IssuedToken<AdmissionToken> tokenOf(
+      UUID userId, UUID eventId, JwtCodec.Signed signed) {
     return new IssuedToken<>(
         signed.compact(),
         new AdmissionToken(userId, eventId, signed.issuedAt(), signed.expiresAt()));

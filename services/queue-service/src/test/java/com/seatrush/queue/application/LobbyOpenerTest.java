@@ -21,6 +21,7 @@ class LobbyOpenerTest {
 
   private static final UUID EVENT_ID = UUID.fromString("0199c5f0-2222-7000-8000-00000000b002");
   private static final Instant ON_SALE_AT = Instant.parse("2026-06-01T10:00:00Z");
+  private static final Instant NOW = Instant.parse("2026-06-01T10:00:01Z");
 
   private final StubCatalog catalog = new StubCatalog();
   private final SaleCalendar calendar = new SaleCalendar(catalog);
@@ -51,7 +52,7 @@ class LobbyOpenerTest {
     List<UUID> queued = queues.queued(EVENT_ID);
     assertThat(queued).doesNotHaveDuplicates().hasSize(30);
     for (UUID userId : queued) {
-      assertThat(queues.place(EVENT_ID, userId))
+      assertThat(queues.place(EVENT_ID, userId, NOW))
           .get()
           .extracting(place -> place.state())
           .isEqualTo(QueueState.QUEUED);
@@ -122,7 +123,7 @@ class LobbyOpenerTest {
     opener.openLobbies();
 
     UUID late = UUID.randomUUID();
-    queues.join(new JoinRequest(EVENT_ID, late, true));
+    queues.join(new JoinRequest(EVENT_ID, late, true, NOW));
     opener.openLobbies();
 
     assertThat(queues.queued(EVENT_ID)).hasSize(4).contains(late);
@@ -149,7 +150,7 @@ class LobbyOpenerTest {
     List<UUID> waiting = new ArrayList<>(users);
     for (int i = 0; i < users; i++) {
       UUID userId = UUID.randomUUID();
-      queues.join(new JoinRequest(EVENT_ID, userId, true));
+      queues.join(new JoinRequest(EVENT_ID, userId, true, NOW));
       waiting.add(userId);
     }
     return waiting;

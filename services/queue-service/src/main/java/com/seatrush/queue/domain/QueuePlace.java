@@ -1,5 +1,6 @@
 package com.seatrush.queue.domain;
 
+import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -16,16 +17,26 @@ import java.util.UUID;
  * counters rather than a {@code ZRANK} through 200,000 entries, and it is why a position can be
  * served on every poll of a flash on-sale.
  *
- * <p>It is an upper bound and not an exact count. Users who leave or whose session dies are still
- * counted in front of whoever is behind them, so a position is slightly pessimistic and only ever
- * falls. A client watching a number that never goes up is a client that trusts it; the exact figure
- * would cost a rank query per poll and would occasionally go backwards, which reads as a bug.
+ * <p>It is an upper bound and not an exact count. Users who leave or whose session dies are skipped
+ * when the door reaches them, so the head moves slightly faster than buyers are admitted and a
+ * position falls slightly faster than the admission rate suggests. A client watching a number that
+ * never goes up is a client that trusts it; the exact figure would cost a rank query per poll and
+ * would occasionally go backwards, which reads as a bug.
  *
  * @param sequence the arrival number, strictly increasing per event, 0 for a user in the lobby
  * @param position how many users are still in front, 0 unless {@link QueueState#QUEUED}
+ * @param admittedUntil when this user's slot in the purchase area expires, or {@code null} if they
+ *     hold none. Absent for everybody who is still waiting, and also for a buyer whose admission
+ *     has lapsed: that is what tells a client its time is up rather than leaving it to wonder why
+ *     its token stopped working
  */
 public record QueuePlace(
-    UUID eventId, UUID userId, QueueState state, long sequence, long position) {
+    UUID eventId,
+    UUID userId,
+    QueueState state,
+    long sequence,
+    long position,
+    Instant admittedUntil) {
 
   public QueuePlace {
     Objects.requireNonNull(eventId, "eventId must not be null");
@@ -41,11 +52,15 @@ public record QueuePlace(
       throw new IllegalArgumentException(
           "only a queued user has a position, and this one is " + state);
     }
+    if (admittedUntil != null && state != QueueState.ADMITTED) {
+      throw new IllegalArgumentException(
+          "only an admitted user holds a slot, and this one is " + state);
+    }
   }
 
   /** A user waiting for a sale that has not opened. */
   public static QueuePlace inLobby(UUID eventId, UUID userId) {
-    return new QueuePlace(eventId, userId, QueueState.LOBBY, 0, 0);
+    return new QueuePlace(eventId, userId, QueueState.LOBBY, 0, 0, null);
   }
 
   /**
@@ -55,21 +70,44 @@ public record QueuePlace(
    * head has already passed is a user who is through the door, and there is no instant at which
    * they are both queued and admitted.
    *
+   * <p>A live slot wins over the arithmetic. The two agree in every ordinary case, because a user
+   * is only given a slot by the same step that moves the head past them; if they ever disagree, the
+   * slot is the fact the gateway will act on, and telling a buyer holding a working admission that
+   * they are still queued would be the less useful of the two answers.
+   *
    * @param head the highest sequence admitted so far, 0 before the first admission
+   * @param admittedUntil the expiry of a live slot, or {@code null} if there is none
    */
-  public static QueuePlace withSequence(UUID eventId, UUID userId, long sequence, long head) {
+  public static QueuePlace withSequence(
+      UUID eventId, UUID userId, long sequence, long head, Instant admittedUntil) {
     if (sequence <= 0) {
       throw new IllegalArgumentException(
           "a queued user has a sequence, and this one is " + sequence);
     }
+    if (admittedUntil != null) {
+      return new QueuePlace(eventId, userId, QueueState.ADMITTED, sequence, 0, admittedUntil);
+    }
     long ahead = sequence - head;
     return ahead <= 0
-        ? new QueuePlace(eventId, userId, QueueState.ADMITTED, sequence, 0)
-        : new QueuePlace(eventId, userId, QueueState.QUEUED, sequence, ahead);
+        ? new QueuePlace(eventId, userId, QueueState.ADMITTED, sequence, 0, null)
+        : new QueuePlace(eventId, userId, QueueState.QUEUED, sequence, ahead, null);
   }
 
   /** Whether this user is through the door. */
   public boolean admitted() {
     return state == QueueState.ADMITTED;
+  }
+
+  /**
+   * Whether this user holds a slot that has not expired, which is the only state in which an
+   * admission token may be minted for them.
+   */
+  public boolean holdsASlot() {
+    return admittedUntil != null;
+  }
+
+  /** Whether this user is still waiting their turn, which is the only state with a position. */
+  public boolean queued() {
+    return state == QueueState.QUEUED;
   }
 }

@@ -12,18 +12,22 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.seatrush.queue.application.QueueService;
 import com.seatrush.queue.application.SaleCalendar;
+import com.seatrush.queue.application.WaitingPlace;
 import com.seatrush.queue.domain.EventNotFoundException;
 import com.seatrush.queue.domain.EventNotOnSaleException;
 import com.seatrush.queue.domain.QueuePlace;
 import com.seatrush.queue.domain.SaleEvent;
 import com.seatrush.queue.domain.SaleStatus;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.context.annotation.Bean;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -42,6 +46,22 @@ class QueueControllerTest {
   @MockitoBean private QueueService queue;
   @MockitoBean private SaleCalendar calendar;
 
+  /**
+   * The clock the admission signer needs.
+   *
+   * <p>A web slice does not load {@code seatrush-common}, which contributes the clock every service
+   * injects, but it does load what this application imports, and the imported admission signer is
+   * built from one. Nothing in this test reads it: the signing happens a layer below.
+   */
+  @TestConfiguration
+  static class WithAClock {
+
+    @Bean
+    Clock clock() {
+      return Clock.systemUTC();
+    }
+  }
+
   @BeforeEach
   void aKnownEvent() {
     given(calendar.find(EVENT_ID))
@@ -49,45 +69,71 @@ class QueueControllerTest {
   }
 
   @Test
-  void answersAJoinWithThePlaceAndTheCountdown() throws Exception {
-    given(queue.join(EVENT_ID, USER_ID))
-        .willReturn(QueuePlace.withSequence(EVENT_ID, USER_ID, 1_200, 200));
+  void answersAJoinWithThePlaceTheWaitAndTheCountdown() throws Exception {
+    given(queue.join(EVENT_ID, USER_ID)).willReturn(queued(1_200, 200, 42L));
 
     mvc.perform(post("/api/events/{id}/queue", EVENT_ID).header("X-User-Id", USER_ID))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.eventId").value(EVENT_ID.toString()))
         .andExpect(jsonPath("$.state").value("QUEUED"))
         .andExpect(jsonPath("$.position").value(1_000))
-        .andExpect(jsonPath("$.onSaleAt").value("2026-06-01T10:00:00Z"));
+        .andExpect(jsonPath("$.estimatedWaitSeconds").value(42))
+        .andExpect(jsonPath("$.onSaleAt").value("2026-06-01T10:00:00Z"))
+        .andExpect(jsonPath("$.admissionToken").doesNotExist())
+        .andExpect(jsonPath("$.admissionExpiresAt").doesNotExist());
   }
 
-  /** A lobby member has no position, and the field is absent rather than zero. */
+  /** A lobby member has no position and nothing to wait through: both fields are absent. */
   @Test
   void leavesThePositionOutForALobbyMember() throws Exception {
-    given(queue.join(EVENT_ID, USER_ID)).willReturn(QueuePlace.inLobby(EVENT_ID, USER_ID));
+    given(queue.join(EVENT_ID, USER_ID))
+        .willReturn(WaitingPlace.of(QueuePlace.inLobby(EVENT_ID, USER_ID)));
 
     mvc.perform(post("/api/events/{id}/queue", EVENT_ID).header("X-User-Id", USER_ID))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.state").value("LOBBY"))
-        .andExpect(jsonPath("$.position").doesNotExist());
+        .andExpect(jsonPath("$.position").doesNotExist())
+        .andExpect(jsonPath("$.estimatedWaitSeconds").doesNotExist());
   }
 
+  /** A buyer through the door: the token and the countdown, and nothing left to wait for. */
   @Test
-  void leavesThePositionOutForAnAdmittedUser() throws Exception {
+  void answersAnAdmittedBuyerWithTheirAdmission() throws Exception {
+    QueuePlace admitted =
+        QueuePlace.withSequence(EVENT_ID, USER_ID, 50, 50, Instant.parse("2026-06-01T10:10:00Z"));
     given(queue.place(EVENT_ID, USER_ID))
-        .willReturn(Optional.of(QueuePlace.withSequence(EVENT_ID, USER_ID, 50, 50)));
+        .willReturn(Optional.of(new WaitingPlace(admitted, null, "v1.admission.token")));
 
     mvc.perform(get("/api/events/{id}/queue/me", EVENT_ID).header("X-User-Id", USER_ID))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.state").value("ADMITTED"))
-        .andExpect(jsonPath("$.position").doesNotExist());
+        .andExpect(jsonPath("$.position").doesNotExist())
+        .andExpect(jsonPath("$.estimatedWaitSeconds").doesNotExist())
+        .andExpect(jsonPath("$.admissionToken").value("v1.admission.token"))
+        .andExpect(jsonPath("$.admissionExpiresAt").value("2026-06-01T10:10:00Z"));
+  }
+
+  /**
+   * The buyer whose time ran out. Admitted with no token is the one case a client has to handle,
+   * and the absence of the token is the signal to re-join rather than to retry.
+   */
+  @Test
+  void answersALapsedBuyerWithNoTokenAtAll() throws Exception {
+    given(queue.place(EVENT_ID, USER_ID))
+        .willReturn(
+            Optional.of(WaitingPlace.of(QueuePlace.withSequence(EVENT_ID, USER_ID, 50, 50, null))));
+
+    mvc.perform(get("/api/events/{id}/queue/me", EVENT_ID).header("X-User-Id", USER_ID))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.state").value("ADMITTED"))
+        .andExpect(jsonPath("$.admissionToken").doesNotExist())
+        .andExpect(jsonPath("$.admissionExpiresAt").doesNotExist());
   }
 
   /** The sequence is an implementation detail of a position and is not part of the contract. */
   @Test
   void neverPublishesTheSequenceNumber() throws Exception {
-    given(queue.join(EVENT_ID, USER_ID))
-        .willReturn(QueuePlace.withSequence(EVENT_ID, USER_ID, 1_200, 200));
+    given(queue.join(EVENT_ID, USER_ID)).willReturn(queued(1_200, 200, 42L));
 
     mvc.perform(post("/api/events/{id}/queue", EVENT_ID).header("X-User-Id", USER_ID))
         .andExpect(jsonPath("$.sequence").doesNotExist());
@@ -138,6 +184,13 @@ class QueueControllerTest {
     verify(queue, times(2)).leave(EVENT_ID, USER_ID);
   }
 
+  private static WaitingPlace queued(long sequence, long head, Long estimatedWaitSeconds) {
+    return new WaitingPlace(
+        QueuePlace.withSequence(EVENT_ID, USER_ID, sequence, head, null),
+        estimatedWaitSeconds,
+        null);
+  }
+
   @Test
   void refusesARequestWithoutTheUserHeader() throws Exception {
     mvc.perform(post("/api/events/{id}/queue", EVENT_ID)).andExpect(status().isBadRequest());
@@ -154,8 +207,7 @@ class QueueControllerTest {
   @Test
   void answersWithoutASaleTimeForAnEventTheCalendarHasLost() throws Exception {
     given(calendar.find(any())).willReturn(Optional.empty());
-    given(queue.place(EVENT_ID, USER_ID))
-        .willReturn(Optional.of(QueuePlace.withSequence(EVENT_ID, USER_ID, 10, 0)));
+    given(queue.place(EVENT_ID, USER_ID)).willReturn(Optional.of(queued(10, 0, 1L)));
 
     mvc.perform(get("/api/events/{id}/queue/me", EVENT_ID).header("X-User-Id", USER_ID))
         .andExpect(status().isOk())

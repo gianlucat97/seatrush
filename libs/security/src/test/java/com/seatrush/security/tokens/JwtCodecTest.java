@@ -62,6 +62,43 @@ class JwtCodecTest {
     assertThat(claims.getExpirationTime().toInstant()).isEqualTo(signed.expiresAt());
   }
 
+  /** The caller's instant, used as given rather than recomputed from the configured lifetime. */
+  @Test
+  void expiresWhenTheCallerSaidItShould() {
+    Instant chosen = clock.instant().plusSeconds(42);
+
+    JwtCodec.Signed signed = codec.signUntil(USER_ID, new JWTClaimsSet.Builder(), chosen);
+
+    assertThat(signed.expiresAt()).isEqualTo(chosen);
+    assertThat(codec.verify(signed.compact()).getExpirationTime().toInstant()).isEqualTo(chosen);
+  }
+
+  /** Whole seconds there too, so a slot scored by the reported instant dies with the token. */
+  @Test
+  void roundsTheCallersInstantToWhatAJwtCanCarry() {
+    JwtCodec.Signed signed =
+        codec.signUntil(
+            USER_ID, new JWTClaimsSet.Builder(), Instant.parse("2026-06-01T10:07:30.900Z"));
+
+    assertThat(signed.expiresAt()).isEqualTo(Instant.parse("2026-06-01T10:07:30Z"));
+  }
+
+  /**
+   * A token born expired would be refused by its own verifier, so it is a bug and not an answer.
+   */
+  @Test
+  void refusesToMintATokenThatHasAlreadyExpired() {
+    assertThatThrownBy(() -> codec.signUntil(USER_ID, new JWTClaimsSet.Builder(), clock.instant()))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("cannot expire at");
+    assertThatThrownBy(
+            () ->
+                codec.signUntil(
+                    USER_ID, new JWTClaimsSet.Builder(), clock.instant().minusSeconds(1)))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("cannot expire at");
+  }
+
   @Test
   void acceptsATokenUntilTheInstantItExpires() {
     String token = codec.sign(USER_ID, new JWTClaimsSet.Builder()).compact();

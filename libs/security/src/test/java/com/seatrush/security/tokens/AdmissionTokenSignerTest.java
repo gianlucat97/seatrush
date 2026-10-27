@@ -65,6 +65,32 @@ class AdmissionTokenSignerTest {
   }
 
   /**
+   * What the admission job calls. The instant it gives is the one that scores the buyer's slot, so
+   * the token and the slot are the same instant used twice rather than two readings of a clock.
+   */
+  @Test
+  void endsExactlyWhenTheQueueSaidTheSlotDoes() {
+    Instant slotExpiresAt = clock.instant().plusSeconds(90);
+
+    IssuedToken<AdmissionToken> issued = signer.issueUntil(USER_ID, EVENT_ID, slotExpiresAt);
+
+    assertThat(issued.claims().expiresAt()).isEqualTo(slotExpiresAt);
+    assertThat(signer.verify(issued.compact()).expiresAt()).isEqualTo(slotExpiresAt);
+
+    clock.setTo(slotExpiresAt);
+    assertThatThrownBy(() -> signer.verify(issued.compact()))
+        .as("the token dies with the slot and not a second after it")
+        .isInstanceOf(TokenException.class);
+  }
+
+  @Test
+  void refusesToMintAnAdmissionThatIsAlreadyOver() {
+    assertThatThrownBy(() -> signer.issueUntil(USER_ID, EVENT_ID, clock.instant()))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("cannot expire at");
+  }
+
+  /**
    * The binding that makes a waiting room bound anything. Without the event in the token, an
    * admission earned by queueing for a quiet show would be a pass to every on-sale in the system.
    */

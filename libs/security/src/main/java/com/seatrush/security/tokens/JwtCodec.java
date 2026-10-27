@@ -98,19 +98,48 @@ final class JwtCodec {
   }
 
   /**
-   * Signs one token, filling in everything a token of either kind carries.
+   * Signs one token that lasts as long as this instance is configured for.
    *
    * @param subject the user the token is about, which becomes the {@code sub} claim
    * @param extraClaims the claims of this kind of token alone, already named by the caller
    */
   Signed sign(UUID subject, JWTClaimsSet.Builder extraClaims) {
-    Objects.requireNonNull(subject, "subject must not be null");
     // Whole seconds, because that is all iat and exp can hold: JWT counts them in epoch seconds
     // and anything finer is dropped on the way out. Rounding here rather than letting the
     // serialiser do it is what keeps the instants reported to the caller equal to the ones the
-    // verifying side will read, and queue-service scores a slot in Redis with exactly these.
+    // verifying side will read.
+    return signUntil(
+        subject, extraClaims, clock.instant().truncatedTo(ChronoUnit.SECONDS).plus(ttl));
+  }
+
+  /**
+   * Signs one token that dies at an instant the caller chose.
+   *
+   * <p>For the caller that is coordinating the token with something else of its own. queue-service
+   * is the one that does: the instant an admission expires is the same instant that scores the
+   * buyer's slot in the active set, and the two have to be the same instant rather than two
+   * readings of a clock a microsecond apart. A token outliving its slot by even a second is a buyer
+   * inside the purchase area that nothing is counting.
+   *
+   * @param expiresAt when the token stops being accepted, rounded down to the second a JWT can
+   *     carry
+   */
+  Signed signUntil(UUID subject, JWTClaimsSet.Builder extraClaims, Instant expiresAt) {
+    Objects.requireNonNull(subject, "subject must not be null");
+    Objects.requireNonNull(expiresAt, "expiresAt must not be null");
     Instant issuedAt = clock.instant().truncatedTo(ChronoUnit.SECONDS);
-    Instant expiresAt = issuedAt.plus(ttl);
+    Instant expiry = expiresAt.truncatedTo(ChronoUnit.SECONDS);
+    if (!issuedAt.isBefore(expiry)) {
+      // A token born expired would be refused by its own verifier, so minting one is a bug in
+      // the caller rather than an answer to give a client.
+      throw new IllegalArgumentException(
+          "a "
+              + audience
+              + " token cannot expire at "
+              + expiry
+              + ", which is not after "
+              + issuedAt);
+    }
 
     JWTClaimsSet claims =
         extraClaims
@@ -118,7 +147,7 @@ final class JwtCodec {
             .audience(audience.claim())
             .subject(subject.toString())
             .issueTime(Date.from(issuedAt))
-            .expirationTime(Date.from(expiresAt))
+            .expirationTime(Date.from(expiry))
             .build();
 
     SignedJWT jwt =
@@ -128,7 +157,7 @@ final class JwtCodec {
     } catch (JOSEException e) {
       throw new IllegalStateException("could not sign a " + audience + " token", e);
     }
-    return new Signed(jwt.serialize(), issuedAt, expiresAt);
+    return new Signed(jwt.serialize(), issuedAt, expiry);
   }
 
   /**
