@@ -29,6 +29,22 @@
       <version>${project.version}</version>
     </dependency>
 
+    <!-- The envelope of order.events, the router that dispatches one, and the consumer error
+         policy its listener runs under. Nothing of the outbox is used here: this service
+         consumes and publishes nothing, because it owns no database to write one in. -->
+    <dependency>
+      <groupId>com.seatrush</groupId>
+      <artifactId>seatrush-messaging</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+
+    <!-- The listener on order.events, and the producer the dead letter topic is written
+         with. spring-kafka is optional inside libs/messaging, so a service that consumes
+         asks for it here. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-kafka</artifactId>
+    </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-webmvc</artifactId>

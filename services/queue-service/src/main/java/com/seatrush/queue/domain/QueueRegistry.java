@@ -69,6 +69,21 @@ public interface QueueRegistry {
   List<UUID> lobby(UUID eventId);
 
   /**
+   * Gives back the purchase area slot of one buyer.
+   *
+   * <p>Called when a checkout has reached a terminal state, which is the one moment somebody is
+   * known to be finished with the room they were let into (README section 6.2). The slot would have
+   * been freed anyway when the admission expired, so what this buys is the minutes in between, and
+   * during an on-sale those minutes are somebody else's turn.
+   *
+   * <p>Idempotent, because the message that triggers it can be delivered twice and because two pods
+   * may read the same one: removing a member that is not there removes nothing.
+   *
+   * @return whether a slot was actually given back
+   */
+  boolean releaseSlot(UUID eventId, UUID userId);
+
+  /**
    * Drops the lobby and the queue of a sale that is over.
    *
    * <p>What it frees is the two collections a flash on-sale fills: a set and a sorted set of two
