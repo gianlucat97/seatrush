@@ -263,6 +263,44 @@ class QueueServiceTest {
     return endsAt;
   }
 
+  /**
+   * A checkout that is over is the one thing that says a buyer is finished with the purchase area
+   * (README section 6.2). Their admission would have expired on its own; what this buys is the
+   * minutes in between, which during an on-sale are the next person's turn.
+   */
+  @Test
+  void givesBackTheSlotOfABuyerWhoseCheckoutIsOver() {
+    open(SaleStatus.ON_SALE);
+    queue.join(EVENT_ID, ADA);
+    admitTheWholeQueue();
+    assertThat(queue.place(EVENT_ID, ADA).orElseThrow().admissionToken()).isNotNull();
+
+    assertThat(queue.releaseSlot(EVENT_ID, ADA)).isTrue();
+
+    assertThat(queue.place(EVENT_ID, ADA).orElseThrow().admissionToken())
+        .as("the slot is gone, so there is nothing left to mint a token from")
+        .isNull();
+  }
+
+  /** A redelivered message, or two pods reading the same one: the slot is given back once. */
+  @Test
+  void givesBackTheSameSlotOnlyOnce() {
+    open(SaleStatus.ON_SALE);
+    queue.join(EVENT_ID, ADA);
+    admitTheWholeQueue();
+
+    assertThat(queue.releaseSlot(EVENT_ID, ADA)).isTrue();
+    assertThat(queue.releaseSlot(EVENT_ID, ADA)).isFalse();
+  }
+
+  @Test
+  void hasNoSlotToGiveBackForSomebodyWhoWasNeverAdmitted() {
+    open(SaleStatus.ON_SALE);
+    queue.join(EVENT_ID, ADA);
+
+    assertThat(queue.releaseSlot(EVENT_ID, ADA)).isFalse();
+  }
+
   private void open(SaleStatus status) {
     catalog.publish(new SaleEvent(EVENT_ID, "A sale", ON_SALE_AT, status));
     calendar.refresh();

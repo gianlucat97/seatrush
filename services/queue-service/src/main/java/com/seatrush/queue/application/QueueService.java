@@ -140,6 +140,38 @@ public class QueueService {
     return wasWaiting;
   }
 
+  /**
+   * Gives back the slot of a buyer whose checkout is over (README section 6.2).
+   *
+   * <p>A terminal order is the one event that says somebody is finished with the purchase area.
+   * Their admission would expire on its own, but an expiry is a timer and this is a fact, and the
+   * difference between the two is the minutes during which a sale with seats left keeps the next
+   * person waiting for nothing.
+   *
+   * <p>It is deliberately not what {@link #leave} does, although both look like a user who is gone.
+   * Leaving the waiting room is a client closing a page, and the buyer may well be mid-checkout; a
+   * confirmed or failed order is the checkout itself reporting that there is nothing left to do.
+   *
+   * <p>What it costs is stated plainly: the admission token this buyer already holds keeps working
+   * until it expires, because a bearer token cannot be recalled, so for those few minutes they
+   * could start another purchase from a slot that is no longer counted. That makes {@code
+   * max-active-users} a cap on slots rather than on tokens, and the overshoot is bounded by how
+   * many buyers finish early. Nothing about overselling depends on it: the seats are protected by
+   * the hold limit of one per user per event and by the Postgres guard, not by this number.
+   *
+   * @return whether a slot was given back, which it is not for a redelivered message
+   */
+  public boolean releaseSlot(UUID eventId, UUID userId) {
+    Objects.requireNonNull(eventId, "eventId must not be null");
+    Objects.requireNonNull(userId, "userId must not be null");
+
+    boolean released = registry.releaseSlot(eventId, userId);
+    if (released) {
+      log.debug("user {} left the purchase area of event {}", userId, eventId);
+    }
+    return released;
+  }
+
   /** A place with whatever else belongs to it: an estimate, a token, or neither. */
   private WaitingPlace answerFor(QueuePlace place) {
     if (place.holdsASlot()) {

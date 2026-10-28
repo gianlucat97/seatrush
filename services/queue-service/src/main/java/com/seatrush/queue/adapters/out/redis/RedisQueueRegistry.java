@@ -142,6 +142,15 @@ public class RedisQueueRegistry implements QueueRegistry {
   }
 
   @Override
+  public boolean releaseSlot(UUID eventId, UUID userId) {
+    Objects.requireNonNull(eventId, "eventId must not be null");
+    Objects.requireNonNull(userId, "userId must not be null");
+
+    Long removed = redis.opsForZSet().remove(QueueKeys.active(eventId), userId.toString());
+    return removed != null && removed > 0;
+  }
+
+  @Override
   public void close(UUID eventId) {
     Objects.requireNonNull(eventId, "eventId must not be null");
 

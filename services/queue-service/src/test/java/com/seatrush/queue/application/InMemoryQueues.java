@@ -110,6 +110,11 @@ class InMemoryQueues implements QueueRegistry {
   }
 
   @Override
+  public boolean releaseSlot(UUID eventId, UUID userId) {
+    return slotsOf(eventId).remove(userId) != null;
+  }
+
+  @Override
   public void close(UUID eventId) {
     lobbyOf(eventId).clear();
     closed.add(eventId);

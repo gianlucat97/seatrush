@@ -15,6 +15,27 @@ spring:
       # database of its own: Redis is all of its state.
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+  kafka:
+    # Only order.events is read, and nothing is written: this service publishes no messages,
+    # because it owns no database to keep an outbox in. The producer below exists for the dead
+    # letter topic alone, which is where a record the listener cannot handle ends up.
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      acks: all
+      properties:
+        enable.idempotence: true
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    consumer:
+      # One group for the whole deployment: a slot is given back once. That is the opposite of
+      # the broadcast pattern realtime uses, where every pod needs every seat event.
+      group-id: ${KAFKA_GROUP_ID:queue-service}
+      # An order that ended while every pod was down still ended, and its slot is still held.
+      auto-offset-reset: earliest
+      # The container commits the offset itself, after the handler has returned.
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
   jackson:
     datatype:
       datetime:
