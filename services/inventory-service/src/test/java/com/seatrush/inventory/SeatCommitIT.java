@@ -11,6 +11,7 @@ import com.seatrush.inventory.application.HoldFreezeService;
 import com.seatrush.inventory.application.HoldService;
 import com.seatrush.inventory.application.PlaceHoldCommand;
 import com.seatrush.inventory.application.SeatReconciler;
+import com.seatrush.inventory.domain.EventStatus;
 import com.seatrush.inventory.domain.Hold;
 import com.seatrush.inventory.domain.HoldResult;
 import com.seatrush.inventory.domain.HoldStatus;
@@ -54,6 +55,10 @@ import org.testcontainers.junit.jupiter.EnabledIfDockerAvailable;
  * key of {@code seat_sale} refuses a second sale of a seat whatever Redis believed, that the books
  * are written before the seat map so a pod dying between them cannot oversell, and that the
  * reconciler finishes a commit whose last step never ran.
+ *
+ * <p>Selling an event out belongs here for the same reason. Which sale took the last seat is
+ * decided inside {@code markSold.lua}, from the counter and the two sets of holds, and the only
+ * place that decision can be believed is against a Redis that holds all three.
  */
 @SpringBootTest
 @TestPropertySource(
@@ -312,14 +317,84 @@ class SeatCommitIT {
     assertThat(replies().getLast()).isEqualTo(new HoldReleased(orderId, frozen.id()));
   }
 
+  /**
+   * The last seats of a sale. The event closes and the stream says so, both inside the step that
+   * sold them, which is why no crash can leave one of the two behind.
+   */
+  @Test
+  void theSaleThatTakesTheLastSeatClosesTheEvent() {
+    eventId = anEventOnSale(1, 2);
+    Hold frozen = aFrozenHold("A-1-1", "A-1-2");
+
+    commands.commit(commitCommand(frozen));
+
+    assertThat(statusOfEvent()).isEqualTo(EventStatus.SOLD_OUT);
+    assertThat(streamTypes()).containsSubsequence("SeatsSold", "EventSoldOut");
+    assertThat(streamTypes()).containsOnlyOnce("EventSoldOut");
+  }
+
+  /** A seat somebody is still holding may be released again, so the sale is not over yet. */
+  @Test
+  void aSaleThatLeavesASeatHeldDoesNotCloseTheEvent() {
+    eventId = anEventOnSale(1, 2);
+    Hold frozen = aFrozenHold("A-1-1");
+    placeAs(UUID.randomUUID(), "A-1-2");
+
+    commands.commit(commitCommand(frozen));
+
+    assertThat(statusOfEvent()).isEqualTo(EventStatus.ON_SALE);
+    assertThat(streamTypes()).doesNotContain("EventSoldOut");
+  }
+
+  @Test
+  void aSaleThatLeavesASeatAvailableDoesNotCloseTheEvent() {
+    eventId = anEventOnSale(1, 2);
+    Hold frozen = aFrozenHold("A-1-1");
+
+    commands.commit(commitCommand(frozen));
+
+    assertThat(statusOfEvent()).isEqualTo(EventStatus.ON_SALE);
+    assertThat(streamTypes()).doesNotContain("EventSoldOut");
+  }
+
+  /**
+   * The window of step 5 once more, with the catalog as the half left behind: every seat is sold in
+   * both stores and the event is still on sale, which is what a pod dying after the seat map and
+   * before the catalog leaves. Nothing else would ever ask again, because there is no next sale to
+   * ask during.
+   */
+  @Test
+  void theReconcilerClosesASaleWhoseLastCommitNeverReachedTheCatalog() {
+    eventId = anEventOnSale(1, 2);
+    Hold frozen = aFrozenHold("A-1-1", "A-1-2");
+    commands.commit(commitCommand(frozen));
+    jdbc.sql("UPDATE event SET status = 'ON_SALE' WHERE id = ?").param(eventId).update();
+
+    reconciler.reconcileOnce();
+
+    assertThat(statusOfEvent()).isEqualTo(EventStatus.SOLD_OUT);
+  }
+
+  @Test
+  void theReconcilerLeavesASaleWithSeatsLeftAlone() {
+    assertThat(reconciler.reconcileOnce()).isZero();
+
+    assertThat(statusOfEvent()).isEqualTo(EventStatus.ON_SALE);
+  }
+
   private Hold aFrozenHold(String... seatIds) {
     HoldResult.Held held = (HoldResult.Held) place(seatIds);
     return freezes.freeze(new FreezeHoldCommand(held.hold().id(), orderId, userId)).hold();
   }
 
   private HoldResult place(String... seatIds) {
+    return placeAs(userId, seatIds);
+  }
+
+  /** A hold of somebody else, which is the only way to have two live holds of one event (I8). */
+  private HoldResult placeAs(UUID buyer, String... seatIds) {
     return holds.place(
-        new PlaceHoldCommand(eventId, userId, List.of(seatIds), UUID.randomUUID().toString()));
+        new PlaceHoldCommand(eventId, buyer, List.of(seatIds), UUID.randomUUID().toString()));
   }
 
   private MessageEnvelope<CommitSeats> commitCommand(Hold hold) {
@@ -327,17 +402,34 @@ class SeatCommitIT {
   }
 
   private UUID anEventOnSale() {
+    return anEventOnSale(2, 5);
+  }
+
+  /**
+   * A sale of exactly as many seats as the test needs.
+   *
+   * <p>Two seats are enough to sell an event out, and they are also the only size at which a test
+   * can: a hold is one user's and a user has one hold per event, so emptying a venue of ten would
+   * be a test about arranging buyers rather than about the last sale.
+   */
+  private UUID anEventOnSale(int rows, int seatsPerRow) {
     UUID id =
         events
             .create(
                 new CreateEventCommand(
                     "Final",
                     ON_SALE,
-                    List.of(new SectionLayout("A", "Floor", Money.of(4500L, "EUR"), 2, 5))))
+                    List.of(
+                        new SectionLayout(
+                            "A", "Floor", Money.of(4500L, "EUR"), rows, seatsPerRow))))
             .id();
     events.schedule(id);
     events.openForSale(id);
     return id;
+  }
+
+  private EventStatus statusOfEvent() {
+    return events.details(eventId).event().status();
   }
 
   /** The payloads of the replies that reached the outbox, in the order they were written. */

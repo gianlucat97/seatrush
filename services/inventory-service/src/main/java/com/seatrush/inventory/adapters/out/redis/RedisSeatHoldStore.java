@@ -214,8 +214,10 @@ public class RedisSeatHoldStore implements SeatHoldStore {
     Objects.requireNonNull(now, "now must not be null");
 
     UUID eventId = hold.eventId();
-    // The available counter is not here: a sale moves a seat from held to sold, and the counter
-    // was already decremented when the hold took it. Only a release gives one back.
+    // The available counter is read and never written: a sale moves a seat from held to sold, and
+    // the counter was already decremented when the hold took it, so only a release gives one back.
+    // It is here together with the expiry set because the script decides on its way out whether
+    // this sale was the last one the event had (README section 9.2).
     List<String> keys =
         List.of(
             SeatKeys.seats(eventId),
@@ -223,7 +225,9 @@ public class RedisSeatHoldStore implements SeatHoldStore {
             SeatKeys.holdCheckout(eventId),
             SeatKeys.userHold(eventId, hold.userId()),
             SeatKeys.hold(eventId, hold.id()),
-            SeatKeys.seatEvents(eventId));
+            SeatKeys.seatEvents(eventId),
+            SeatKeys.available(eventId),
+            SeatKeys.holdExpiry(eventId));
 
     List<String> args =
         List.of(
@@ -235,7 +239,9 @@ public class RedisSeatHoldStore implements SeatHoldStore {
 
     ScriptReply reply = run(scripts.markSold(), keys, args);
     return switch (reply.status()) {
-      case "OK" -> new MarkSoldResult.Sold(reply.requireVersion(), reply.soldSeatsOrZero());
+      case "OK" ->
+          new MarkSoldResult.Sold(
+              reply.requireVersion(), reply.soldSeatsOrZero(), reply.soldOutOrFalse());
       case "ALREADY_SOLD" -> new MarkSoldResult.AlreadySold();
       case "NOT_FOUND" -> new MarkSoldResult.NotFound();
       case "WRONG_STATE" ->

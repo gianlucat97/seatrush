@@ -162,18 +162,23 @@ public class RedisSeatEventStream implements SeatEventStream {
    *
    * <p>Everything is a string in a stream, which is why the numbers and the instant are parsed
    * here: the Lua side has no types to lose, and this is the only place that has to agree with it.
+   *
+   * <p>The hold is the one field read as optional. An {@code EventSoldOut} entry names none,
+   * because it is a fact about the event rather than a change somebody's hold made, and demanding
+   * one would make the entry that closes a sale the one entry the relay cannot parse.
    */
   private static SeatEventRecord toSeatEvent(
       UUID eventId, MapRecord<String, Object, Object> record) {
     Map<Object, Object> fields = record.getValue();
     String seats = string(fields, "seats");
+    String holdId = fields.get("holdId") == null ? null : String.valueOf(fields.get("holdId"));
     return new SeatEventRecord(
         recordId(record),
         eventId,
         string(fields, "type"),
         seats == null || seats.isBlank() ? List.of() : Arrays.asList(seats.split(",")),
         Long.parseLong(string(fields, "version")),
-        UUID.fromString(string(fields, "holdId")),
+        holdId == null || holdId.isBlank() ? null : UUID.fromString(holdId),
         Instant.ofEpochMilli(Long.parseLong(string(fields, "occurredAt"))));
   }
 

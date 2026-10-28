@@ -197,7 +197,7 @@ Owns events, venue layout, seat state, holds and the final record of sales.
 - **Seat commit**: on `CommitSeats` command, writes `seat_sale` rows in Postgres, then marks the seats sold in Redis (see [§9.6](#96-seat-commit-procedure)).
 - **Seat map snapshot**: current state of all seats of an event with its `version`, used by clients for the initial render.
 - **Seat events**: Lua scripts append `SeatsHeld`, `SeatsReleased`, `SeatsSold` to a per-event Redis Stream; a stream relay forwards them to Kafka.
-- **Sold-out detection**: when the last available seat of an event is sold, publishes `EventSoldOut` and sets the event status to `SOLD_OUT`.
+- **Sold-out detection**: the sale that takes the last seat decides it, inside `markSold.lua` and in the same step that sells the seats, because that is the only instant at which the answer cannot be argued with and a sale is the only thing that can make it yes. The condition is the one of [§9.2](#92-redis-key-design) read with three O(1) commands: nothing available, no hold counting down and no hold in a checkout. A held seat is deliberately not counted as gone, since it may still be released. The script appends `EventSoldOut` to the seat event stream, so the announcement travels with the sale that caused it, and the commit then sets the event status to `SOLD_OUT`, which is what refuses further holds and closes the waiting room. The reconciler asks the same question of every event still on sale, because a pod dying between the two halves would otherwise leave a sold out event on sale for ever: there is no next sale to notice it.
 - **Reconciler**: on startup and periodically, verifies that every `seat_sale` row is `SOLD` in Redis and fixes Redis if not (Postgres is the source of truth for sales).
 - **Rebuild procedure**: on Redis data loss, seat state is rebuilt from Postgres and active holds are dropped (safe: holds are temporary by definition; frozen holds are recovered from the SAGA side, see [§16](#16-failure-modes)).
 
@@ -483,9 +483,9 @@ Companion scripts:
 | `release.lua` | `ACTIVE`/`CHECKOUT` → `RELEASED`; seats back to `A`; clears `userhold`; `SeatsReleased` |
 | `expire.lua` | Like release, but only if status is still `ACTIVE` and `expiresAt` ≤ now; otherwise no-op |
 | `freeze.lua` | `ACTIVE` → `CHECKOUT`, stores `orderId`, moves the hold from the expiry set to the checkout set; idempotent for the same `orderId`; fails if expired or frozen by another order |
-| `markSold.lua` | `CHECKOUT` → `CONSUMED`; seats → `S`; clears `userhold`; leaves the checkout set; `SeatsSold`; idempotent for the same `orderId` |
+| `markSold.lua` | `CHECKOUT` → `CONSUMED`; seats → `S`; clears `userhold`; leaves the checkout set; `SeatsSold`, plus `EventSoldOut` if this sale took the last seat; idempotent for the same `orderId` |
 
-Note: a released or sold seat increments/decrements `available` accordingly; when `available` reaches 0 *and* no seat is held, the event is sold out.
+Note: a released or sold seat increments/decrements `available` accordingly; when `available` reaches 0 *and* no seat is held, the event is sold out. `markSold.lua` checks exactly that on its way out, reading `available` and then the `ZCARD` of the two hold sets, which is why the held seats are countable without reading the seat map, and appends `EventSoldOut` to the stream when the sale it just made was the last one.
 
 ### 9.3 Hold expiry
 
@@ -518,8 +518,9 @@ On `CommitSeats(orderId, holdId)`:
 1. Check in Redis that the hold is `CHECKOUT` for this `orderId`. If it is already `CONSUMED` for this order, reply `SeatsCommitted` (redelivery). Otherwise, if not valid, reply `SeatsCommitFailed`.
 2. In **one Postgres transaction**: insert `seat_sale` rows, insert `processed_message`, insert the `SeatsCommitted` reply into the outbox.
 3. If the transaction fails with a primary key violation: increment `seatrush_oversell_prevented_total`, then in a new transaction write `SeatsCommitFailed` to the outbox.
-4. After commit, run `markSold.lua` (seats `S`, hold `CONSUMED`, `SeatsSold` stream event).
+4. After commit, run `markSold.lua` (seats `S`, hold `CONSUMED`, `SeatsSold` stream event, plus `EventSoldOut` and the move to `SOLD_OUT` if this sale took the last seat of the event).
 5. If the pod dies between steps 2 and 4, the seats are sold in Postgres but still held in Redis: nobody else can take them, and the **reconciler** applies `markSold.lua` on the next run. No overselling is possible in any interleaving.
+6. If it dies between the script and the status change, the seat map says sold out and the catalog still says on sale. The reconciler closes that too, by asking every event still on sale whether anything is left to sell.
 
 ### 9.7 SAGA persistence
 
@@ -866,6 +867,7 @@ Prometheus alert rules: `oversell_prevented > 0`, outbox lag > 5 s, SAGA past de
 |---------|-------------------|
 | inventory pod dies during a hold | Lua script is atomic: the hold exists or it does not. Client retries with the same `Idempotency-Key` and gets the original result. |
 | inventory pod dies between `seat_sale` commit and `markSold.lua` | Seats stay held (not available to others); reconciler marks them sold; reply already in outbox. |
+| inventory pod dies after `markSold.lua` sold the last seat | `EventSoldOut` is already on the stream, because the script appended it in the same step; the reconciler moves the event to `SOLD_OUT` on its next pass. |
 | order pod dies mid-SAGA | SAGA state is in Postgres; any pod continues when the next reply arrives or when the scheduler fires. |
 | Duplicate Kafka delivery | Ignored via `processed_message`; Lua scripts and payment operations are idempotent. |
 | Kafka temporarily unavailable | Outbox rows and stream entries accumulate; relays publish them when Kafka is back. No data loss. |

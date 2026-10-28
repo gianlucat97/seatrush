@@ -59,6 +59,7 @@ public class CheckoutCommandService {
 
   private final SeatHoldStore holds;
   private final SeatSaleRepository sales;
+  private final SaleCloser saleCloser;
   private final IdempotentConsumer consumer;
   private final Outbox outbox;
   private final MessageFactory messages;
@@ -70,6 +71,7 @@ public class CheckoutCommandService {
   public CheckoutCommandService(
       SeatHoldStore holds,
       SeatSaleRepository sales,
+      SaleCloser saleCloser,
       IdempotentConsumer consumer,
       Outbox outbox,
       MessageFactory messages,
@@ -77,6 +79,7 @@ public class CheckoutCommandService {
       MeterRegistry meters) {
     this.holds = holds;
     this.sales = sales;
+    this.saleCloser = saleCloser;
     this.consumer = consumer;
     this.outbox = outbox;
     this.messages = messages;
@@ -220,16 +223,27 @@ public class CheckoutCommandService {
     applyToSeatMap(hold, orderId);
   }
 
-  /** Makes the seat map agree with the books, which the reconciler also does. */
+  /**
+   * Makes the seat map agree with the books, which the reconciler also does.
+   *
+   * <p>A sale that took the last seat of the event closes it here, immediately after the step that
+   * made it true and never before: the script decided it while the seats changed hands, so by the
+   * time the catalog is told, there is nothing anybody could still buy. The announcement on {@code
+   * inventory.seat-events} was written by that same step, so the two cannot disagree.
+   */
   void applyToSeatMap(Hold hold, UUID orderId) {
     MarkSoldResult result = holds.markSold(hold, orderId, clock.instant());
     switch (result) {
-      case MarkSoldResult.Sold sold ->
-          log.debug(
-              "the seat map of event {} now says {} seats sold, at version {}",
-              hold.eventId(),
-              sold.soldSeats(),
-              sold.version());
+      case MarkSoldResult.Sold sold -> {
+        log.debug(
+            "the seat map of event {} now says {} seats sold, at version {}",
+            hold.eventId(),
+            sold.soldSeats(),
+            sold.version());
+        if (sold.soldOut()) {
+          saleCloser.close(hold.eventId());
+        }
+      }
       case MarkSoldResult.AlreadySold ignored ->
           log.debug("the seat map already said sold for order {}", orderId);
       case MarkSoldResult.NotFound ignored ->

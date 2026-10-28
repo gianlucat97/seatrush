@@ -32,6 +32,7 @@ final class InMemoryHolds implements SeatHoldStore, HoldDirectory {
   private final Map<UUID, Hold> holds = new HashMap<>();
   private final List<UUID> frozen = new ArrayList<>();
   private final List<UUID> markedSold = new ArrayList<>();
+  private boolean soldOut;
   private FreezeResult nextFreeze;
   private MarkSoldResult nextMarkSold;
   private ReleaseResult nextRelease;
@@ -46,6 +47,11 @@ final class InMemoryHolds implements SeatHoldStore, HoldDirectory {
   /** Makes the hold findable but the freeze answer whatever the test is interested in. */
   void freezeAnswers(FreezeResult result) {
     this.nextFreeze = result;
+  }
+
+  /** Makes every later sale report that it took the last seat the event had. */
+  void sellsTheEventOut() {
+    this.soldOut = true;
   }
 
   /** Makes the mark sold script answer whatever the test is interested in. */
@@ -121,7 +127,7 @@ final class InMemoryHolds implements SeatHoldStore, HoldDirectory {
             orderId);
     holds.put(consumed.id(), consumed);
     frozen.remove(hold.id());
-    return new MarkSoldResult.Sold(++version, consumed.seatCount());
+    return new MarkSoldResult.Sold(++version, consumed.seatCount(), soldOut);
   }
 
   @Override

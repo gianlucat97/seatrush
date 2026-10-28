@@ -46,6 +46,11 @@ final class InMemorySeatState implements SeatStateStore {
   }
 
   @Override
+  public boolean isSoldOut(UUID eventId) {
+    return read(eventId).map(SeatState::isSoldOut).orElse(false);
+  }
+
+  @Override
   public void clear(UUID eventId) {
     states.remove(eventId);
   }

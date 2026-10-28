@@ -34,6 +34,22 @@ public interface SeatStateStore {
   /** Whether this event has seat state at all, which is cheaper than reading it. */
   boolean isWarm(UUID eventId);
 
+  /**
+   * Whether the sale has nothing left to take: no seat available and no seat held.
+   *
+   * <p>The same question {@link SeatState#isSoldOut()} answers, asked without reading the seat map.
+   * A venue is tens of thousands of fields and this is asked on a schedule, so an implementation is
+   * expected to answer it from counters rather than from seats.
+   *
+   * <p>This is not how a sold out event is detected. The sale that takes the last seat decides that
+   * for itself, in the same step that sells it, so nothing can be announced that did not happen.
+   * This is the safety net for the one case that step cannot cover: the sale reached both stores
+   * and the pod died before the catalog was told. It is read outside any transaction and may
+   * therefore disagree with a hold being placed at that very instant, which costs a pass and never
+   * a wrong answer: a sale that is not sold out yet is simply looked at again.
+   */
+  boolean isSoldOut(UUID eventId);
+
   /** Drops the seat state of an event, the way closing a sale or a test between runs does. */
   void clear(UUID eventId);
 }

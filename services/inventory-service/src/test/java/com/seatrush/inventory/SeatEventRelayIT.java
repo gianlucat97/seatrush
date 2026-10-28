@@ -15,6 +15,7 @@ import com.seatrush.inventory.domain.SectionLayout;
 import com.seatrush.messaging.MessageCodec;
 import com.seatrush.messaging.MessageEnvelope;
 import com.seatrush.messaging.Topics;
+import com.seatrush.messaging.messages.EventSoldOut;
 import com.seatrush.messaging.messages.Message;
 import com.seatrush.messaging.messages.SeatsHeld;
 import com.seatrush.messaging.messages.SeatsReleased;
@@ -41,6 +42,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -78,6 +80,7 @@ class SeatEventRelayIT {
   @Autowired private MessageCodec codec;
   @Autowired private MutableClock clock;
   @Autowired private JdbcClient jdbc;
+  @Autowired private StringRedisTemplate redis;
 
   private UUID eventId;
 
@@ -186,6 +189,35 @@ class SeatEventRelayIT {
         .extracting(envelope -> ((SeatsHeld) envelope.payload()).version())
         .containsExactlyElementsOf(List.of(1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 9L, 10L));
     assertThat(envelopes).extracting(MessageEnvelope::messageId).doesNotHaveDuplicates();
+  }
+
+  /**
+   * The one entry on this stream that is not a change to the seat map.
+   *
+   * <p>{@code markSold.lua} appends it in the same step as the sale that sold the last seat, and it
+   * names no seats and no hold because it says something about the event instead. It is written by
+   * hand here, because what is being asked is whether the relay carries an entry of that shape
+   * rather than whether a sale produces one, which {@code SeatCommitIT} answers against Redis.
+   */
+  @Test
+  void anEventSoldOutEntryComesOutOfKafkaAsAnEventSoldOutMessage() {
+    redis
+        .<String, String>opsForStream()
+        .add(
+            "seat-events:{evt:" + eventId + "}",
+            Map.of(
+                "type", "EventSoldOut",
+                "eventId", eventId.toString(),
+                "seats", "",
+                "version", "7",
+                "occurredAt", Long.toString(ON_SALE.toEpochMilli())));
+
+    assertThat(relay.relayOnce()).isEqualTo(1);
+
+    MessageEnvelope<Message> envelope = codec.decode(oneRecord().value());
+    assertThat(envelope.type()).isEqualTo("EventSoldOut");
+    assertThat(envelope.payload()).isEqualTo(new EventSoldOut(eventId));
+    assertThat(envelope.correlationId()).isEqualTo(eventId);
   }
 
   private HoldResult.Held hold(String... seatIds) {

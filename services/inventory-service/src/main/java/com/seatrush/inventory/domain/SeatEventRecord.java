@@ -16,9 +16,11 @@ import java.util.UUID;
  * difference between the two is exactly the lag of the relay, which is what the propagation metric
  * of README section 14.1 is there to measure.
  *
- * @param type the name of the seat event: SeatsHeld, SeatsReleased or SeatsSold
+ * @param type the name of the seat event: SeatsHeld, SeatsReleased, SeatsSold or EventSoldOut
  * @param version the seat state version the change produced, which is how a consumer recognises a
  *     duplicate without remembering every message it ever saw
+ * @param holdId the hold the change belongs to, absent on an {@code EventSoldOut}, which names no
+ *     hold and no seats because it says something about the event instead
  */
 public record SeatEventRecord(
     String recordId,

@@ -31,6 +31,11 @@ import org.springframework.stereotype.Component;
  * applies the same step the commit would have. A frozen hold with no sale is a checkout still in
  * progress and is left alone.
  *
+ * <p>It closes a sold out sale for the same reason, and it is the same window seen from the other
+ * side. The sale that takes the last seat says so in Redis and has the catalog told right after; a
+ * pod dying between the two would leave an event on sale with nothing to sell and no later sale to
+ * notice, because there is nothing left to sell. Every pass asks the question again.
+ *
  * <p>Safe on every pod at once with no leader election, for the same reason the sweeper is: the
  * script it ends in is idempotent for the order it names, so the slowest pod finds the work done.
  */
@@ -48,6 +53,7 @@ public class SeatReconciler {
   private final SeatSaleRepository sales;
   private final ReconcilerProperties properties;
   private final CheckoutCommandService commits;
+  private final SaleCloser saleCloser;
   private final Counter reconciled;
 
   public SeatReconciler(
@@ -56,12 +62,14 @@ public class SeatReconciler {
       SeatSaleRepository sales,
       ReconcilerProperties properties,
       CheckoutCommandService commits,
+      SaleCloser saleCloser,
       MeterRegistry meters) {
     this.events = events;
     this.holds = holds;
     this.sales = sales;
     this.properties = properties;
     this.commits = commits;
+    this.saleCloser = saleCloser;
     this.reconciled =
         Counter.builder("seatrush.redis.reconciliations")
             .description("Seats fixed in Redis by the reconciler")
@@ -92,6 +100,11 @@ public class SeatReconciler {
     for (EventStatus status : RECONCILED) {
       for (Event event : events.findByStatus(status)) {
         fixed += reconcileEvent(event.id());
+        if (status == EventStatus.ON_SALE) {
+          // After the holds and not before: a commit this pass just finished may be the one that
+          // sold the last seat, and asking first would leave the sale open for another interval.
+          saleCloser.closeIfSoldOut(event.id());
+        }
       }
     }
     return fixed;
