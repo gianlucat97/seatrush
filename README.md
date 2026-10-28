@@ -163,10 +163,12 @@ flowchart LR
 
 Single entry point for clients. Built on Spring Cloud Gateway (reactive), so it can hold many long-lived SSE connections cheaply.
 
-- Validates user JWTs on every request, except `POST /api/auth/demo-login`.
+- Validates user JWTs on every request, except `POST /api/auth/demo-login` and the actuator endpoints a probe calls.
 - Validates **admission tokens** on purchase commands only (`POST /holds`, `DELETE /holds/{id}`, `POST /orders`). Reads (`GET /orders/{id}`) need only the user JWT, so a user can follow an order even after the admission token has expired.
 - Token-bucket **rate limiting per user and per IP**, backed by Redis.
-- Removes any client-supplied `X-User-Id` header and sets it from the validated JWT.
+- Removes any client-supplied `X-User-Id` header and sets it from the validated JWT. The removal happens on every request, including the ones that need no token, because that header is what every service behind the gateway trusts completely.
+- Presented in `X-Admission-Token`, an admission is checked three ways before a purchase command is forwarded: that this deployment signed it and it has not lapsed, that its subject is the caller rather than somebody who passed it on, and, where the path names an event, that it is for that sale. `DELETE /holds/{id}` and `POST /orders` name a hold and an order instead, whose event is known to the services that own them, so ownership is checked there rather than read here to repeat a check somebody else makes. The header is dropped before the request is forwarded, since the only thing that validates an admission is the only thing that needs to see one.
+- Refuses with the Problem Details of [§12.6](#126-error-codes): `401 UNAUTHENTICATED` for a missing or invalid token, `403 FORBIDDEN` for an admin endpoint without the role, `403 ADMISSION_REQUIRED` for a purchase command without a turn. Which check failed stays in the log, because only an attacker learns anything from being told.
 - Routes requests to downstream services, propagates trace context and streams SSE responses without buffering.
 
 ### 6.2 Queue Service (`services/queue-service`)
@@ -726,7 +728,7 @@ All endpoints are served through the gateway under `/api`. Errors follow **RFC 9
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/auth/demo-login` | Body `{ "username": "...", "admin": false }` → `{ "accessToken": "jwt" }`. Enabled only in `local` and `bench` profiles. |
+| `POST` | `/api/auth/demo-login` | Body `{ "username": "...", "admin": false }` → `{ accessToken, userId, username, expiresAt }`. The user id is derived from the name, so logging in twice is the same buyer and a benchmark run is repeatable. Enabled only in the `local` and `bench` profiles, by profile rather than by a flag. |
 
 ### 12.2 Events and seat map
 
@@ -753,15 +755,15 @@ All endpoints are served through the gateway under `/api`. Errors follow **RFC 9
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `POST` | `/api/events/{eventId}/holds` | JWT + admission | Body `{ seatIds:[...] }`, header `Idempotency-Key` → `201 { holdId, seatIds, expiresAt }` |
+| `POST` | `/api/events/{eventId}/holds` | JWT + admission | Body `{ seatIds:[...] }`, headers `Idempotency-Key` and `X-Admission-Token` → `201 { holdId, seatIds, expiresAt }` |
 | `GET` | `/api/holds/{holdId}` | JWT | Hold details (owner only) |
-| `DELETE` | `/api/holds/{holdId}` | JWT + admission | Release the hold (owner only, only if `ACTIVE`) |
+| `DELETE` | `/api/holds/{holdId}` | JWT + admission | Release the hold (owner only, only if `ACTIVE`), header `X-Admission-Token` |
 
 ### 12.5 Orders
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `POST` | `/api/orders` | JWT + admission | Body `{ holdId }`, header `Idempotency-Key` → `202 { orderId, status: "PENDING" }` with `Location` header |
+| `POST` | `/api/orders` | JWT + admission | Body `{ holdId }`, headers `Idempotency-Key` and `X-Admission-Token` → `202 { orderId, status: "PENDING" }` with `Location` header |
 | `GET` | `/api/orders/{orderId}` | JWT | Order with status, items, total and, if confirmed, tickets (owner only) |
 | `GET` | `/api/orders` | JWT | Current user's orders (cursor pagination) |
 
@@ -1090,6 +1092,9 @@ Main properties (all overridable via environment variables):
 | `seatrush.admission.token-ttl` | queue, gateway | `10m` | Admission token lifetime, which is also how long the slot in `active:{evt:<id>}` is held |
 | `seatrush.admission.secret` | queue, gateway | none | Base64 HS256 secret (>= 32 bytes) admission tokens are signed with; a throwaway one is generated when unset |
 | `seatrush.queue.position-update-interval` | queue | `3s` | SSE position update period |
+| `seatrush.gateway.inventory` | gateway | `http://localhost:8081` | Where inventory answers: events, the seat map and holds |
+| `seatrush.gateway.order` | gateway | `http://localhost:8082` | Where order-service answers |
+| `seatrush.gateway.queue` | gateway | `http://localhost:8084` | Where queue-service answers |
 | `seatrush.auth.secret` | gateway | none | Base64 HS256 secret (>= 32 bytes) user JWTs are signed with; a throwaway one is generated when unset |
 | `seatrush.auth.token-ttl` | gateway | `1h` | User JWT lifetime |
 | `seatrush.checkout.timeout` | order | `2m` | SAGA deadline before the pivot |
