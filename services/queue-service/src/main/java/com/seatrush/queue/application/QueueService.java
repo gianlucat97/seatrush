@@ -104,6 +104,19 @@ public class QueueService {
   }
 
   /**
+   * The highest sequence the door of a sale has let through.
+   *
+   * <p>Read once per pass by the stream and then shared by every listener of that sale: a position
+   * is a sequence less this number, and the sequence of a waiting user never changes. That is what
+   * keeps pushing a position to ten thousand clients one read rather than ten thousand.
+   */
+  public long head(UUID eventId) {
+    Objects.requireNonNull(eventId, "eventId must not be null");
+
+    return registry.head(eventId);
+  }
+
+  /**
    * Takes a user out of the waiting room.
    *
    * <p>Idempotent, and the return value says which of the two happened. Leaving does not pull the
@@ -133,7 +146,7 @@ public class QueueService {
       return new WaitingPlace(place, null, admissionTokenFor(place));
     }
     if (place.queued()) {
-      return new WaitingPlace(place, estimatedWaitSecondsFor(place), null);
+      return new WaitingPlace(place, estimatedWaitSeconds(place.eventId(), place.position()), null);
     }
     return WaitingPlace.of(place);
   }
@@ -160,15 +173,19 @@ public class QueueService {
    * <p>Rounded up, and never below one second for somebody who is still waiting. Telling a user
    * with four hundred people in front of them that the wait is zero would be a worse answer than
    * any number.
+   *
+   * <p>Public because the stream needs it for a position it worked out by arithmetic rather than by
+   * reading a place: the number a client is pushed has to be made the same way as the one it would
+   * have been answered with, or a user polling and streaming at once would see two waits.
    */
-  private long estimatedWaitSecondsFor(QueuePlace place) {
-    OptionalDouble observed = rates.perSecond(place.eventId());
+  public long estimatedWaitSeconds(UUID eventId, long position) {
+    OptionalDouble observed = rates.perSecond(eventId);
     double perSecond = observed.orElse(admission.ratePerSecond());
     if (perSecond <= 0) {
       // A door that has not moved at all for a while. There is no honest number for this, and the
       // configured ceiling is the only figure that is not a guess about why it stopped.
       perSecond = admission.ratePerSecond();
     }
-    return Math.max(1, (long) Math.ceil(place.position() / perSecond));
+    return Math.max(1, (long) Math.ceil(position / perSecond));
   }
 }

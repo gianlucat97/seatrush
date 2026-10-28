@@ -22,20 +22,28 @@ import org.springframework.validation.annotation.Validated;
  * become a single script invocation that blocks Redis for everybody else. Each chunk is atomic and
  * the order across chunks is the shuffled one, so splitting changes nothing a user can observe.
  *
+ * <p>{@code positionUpdateInterval} is how often the stream of README section 12.3 looks at every
+ * sale somebody is listening to. It is a few seconds rather than one because a position is a number
+ * a human reads: pushing it every second would be three times the traffic for a figure nobody can
+ * follow that fast, and a client that wants it sooner can ask for it.
+ *
  * @param catalogRefreshInterval how often inventory's event list is read
  * @param lobbyOpenInterval how often an open sale is checked for a lobby still to drain
  * @param lobbyOpenChunkSize how many users are appended to the queue per Lua call
+ * @param positionUpdateInterval how often positions are pushed to the clients listening
  */
 @Validated
 @ConfigurationProperties(prefix = "seatrush.queue")
 public record QueueProperties(
     @NotNull @DefaultValue("1s") Duration catalogRefreshInterval,
     @NotNull @DefaultValue("1s") Duration lobbyOpenInterval,
-    @Min(1) @Max(10_000) @DefaultValue("1000") int lobbyOpenChunkSize) {
+    @Min(1) @Max(10_000) @DefaultValue("1000") int lobbyOpenChunkSize,
+    @NotNull @DefaultValue("3s") Duration positionUpdateInterval) {
 
   public QueueProperties {
     requirePositive(catalogRefreshInterval, "catalog-refresh-interval");
     requirePositive(lobbyOpenInterval, "lobby-open-interval");
+    requirePositive(positionUpdateInterval, "position-update-interval");
   }
 
   private static void requirePositive(Duration value, String name) {

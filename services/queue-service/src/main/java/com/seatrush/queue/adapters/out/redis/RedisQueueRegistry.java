@@ -134,6 +134,21 @@ public class RedisQueueRegistry implements QueueRegistry {
   }
 
   @Override
+  public long head(UUID eventId) {
+    Objects.requireNonNull(eventId, "eventId must not be null");
+
+    String head = redis.opsForValue().get(QueueKeys.head(eventId));
+    return head == null ? 0L : Long.parseLong(head);
+  }
+
+  @Override
+  public void close(UUID eventId) {
+    Objects.requireNonNull(eventId, "eventId must not be null");
+
+    redis.delete(List.of(QueueKeys.lobby(eventId), QueueKeys.queue(eventId)));
+  }
+
+  @Override
   public boolean leave(UUID eventId, UUID userId) {
     Objects.requireNonNull(eventId, "eventId must not be null");
     Objects.requireNonNull(userId, "userId must not be null");
