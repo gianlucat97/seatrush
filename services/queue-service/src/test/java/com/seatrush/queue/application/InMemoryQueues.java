@@ -20,6 +20,10 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * A {@link QueueRegistry} in a few maps, for the tests of the layer above it.
  *
+ * <p>Not final, so that a test which cares how often the store is asked something can wrap a method
+ * and count. The arithmetic of the stream exists precisely to avoid those reads, and a promise
+ * about cost is only kept if something asserts it.
+ *
  * <p>It keeps the rules the Lua scripts keep, because those rules are what the callers rely on: a
  * join is idempotent, a user already holding a sequence keeps it whatever the request asked for,
  * opening the lobby claims a user by removing them from it, and admitting frees the slots that have
@@ -27,13 +31,14 @@ import java.util.concurrent.atomic.AtomicLong;
  * scripts are tested against a real Redis, which is the only place that question can honestly be
  * asked.
  */
-final class InMemoryQueues implements QueueRegistry {
+class InMemoryQueues implements QueueRegistry {
 
   private final Map<UUID, Set<UUID>> lobbies = new LinkedHashMap<>();
   private final Map<UUID, Map<UUID, Long>> sequences = new LinkedHashMap<>();
   private final Map<UUID, Map<UUID, Instant>> slots = new LinkedHashMap<>();
   private final Map<UUID, AtomicLong> counters = new LinkedHashMap<>();
   private final Map<UUID, Long> heads = new LinkedHashMap<>();
+  private final Set<UUID> closed = new LinkedHashSet<>();
 
   @Override
   public QueuePlace join(JoinRequest request) {
@@ -100,6 +105,17 @@ final class InMemoryQueues implements QueueRegistry {
   }
 
   @Override
+  public long head(UUID eventId) {
+    return headOf(eventId);
+  }
+
+  @Override
+  public void close(UUID eventId) {
+    lobbyOf(eventId).clear();
+    closed.add(eventId);
+  }
+
+  @Override
   public boolean leave(UUID eventId, UUID userId) {
     boolean wasInLobby = lobbyOf(eventId).remove(userId);
     boolean wasQueued = sequencesOf(eventId).remove(userId) != null;
@@ -121,6 +137,11 @@ final class InMemoryQueues implements QueueRegistry {
       }
     }
     return queued;
+  }
+
+  /** The sales whose waiting room was closed, which is what a sold out event leaves behind. */
+  Set<UUID> closedRooms() {
+    return Set.copyOf(closed);
   }
 
   /** Moves the admission head without handing out a slot, for the position arithmetic alone. */

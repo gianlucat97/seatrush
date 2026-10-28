@@ -36,6 +36,10 @@ seatrush:
     # Only how many users travel in one Lua call. The whole lobby is still shuffled as one,
     # because a shuffle of part of it would not be a shuffle.
     lobby-open-chunk-size: ${SEATRUSH_QUEUE_LOBBY_OPEN_CHUNK_SIZE:1000}
+    # How often every listening client is looked at. A few seconds rather than one, because a
+    # position is a number a human reads: three times the traffic would buy nothing anybody can
+    # follow, and a client that wants it sooner can ask for it.
+    position-update-interval: ${SEATRUSH_QUEUE_POSITION_UPDATE_INTERVAL:3s}
   admission:
     # The two numbers a waiting room exists for (README section 22). max-active-users is the one
     # that protects the system: whatever the queue is, inventory never sees more buyers holding
@@ -53,6 +57,15 @@ seatrush:
     # The HS256 secret the token is signed with, shared with the gateway and nothing else. Left
     # empty here, which makes the service generate one at startup and warn that it has.
     secret: ${SEATRUSH_ADMISSION_SECRET:}
+  sse:
+    # What a proxy or a mobile network needs to be told that a quiet stream is still alive. It
+    # is a comment and not a position, because an unchanged position is not news and a waiting
+    # room of a hundred thousand clients would broadcast it every few seconds.
+    heartbeat-interval: ${SEATRUSH_SSE_HEARTBEAT_INTERVAL:15s}
+    # How long one stream may stay open. A client that went away without closing anything leaves
+    # a connection that looks open until something is written to it; ending the stream bounds
+    # what a pod holds, and the client reconnects. Far longer than any ordinary wait.
+    timeout: ${SEATRUSH_SSE_TIMEOUT:30m}
   inventory:
     # The catalog is read from inventory (README section 12.2). Both timeouts stay below the
     # refresh interval, so a hung read cannot pile one refresh on top of the next.

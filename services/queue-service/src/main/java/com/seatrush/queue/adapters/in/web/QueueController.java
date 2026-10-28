@@ -7,6 +7,7 @@ import com.seatrush.queue.domain.NotWaitingException;
 import java.time.Instant;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -15,6 +16,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /**
  * The waiting room endpoints of README section 12.3.
@@ -27,10 +29,11 @@ import org.springframework.web.bind.annotation.RestController;
  * gateway and one sent straight to this service hit the same path and no rewrite rule has to be
  * kept in step with the controllers.
  *
- * <p>The SSE stream of the same section arrives with the feature that can push; this one answers
- * the same thing on request. {@code GET .../queue/me} is not only a fallback either: it is what a
- * client that lost its stream reads to find out where it now stands, and it is where an admitted
- * buyer gets the token to go shopping with.
+ * <p>Three of the four endpoints answer a question and the fourth keeps answering it: {@code GET
+ * .../queue/stream} pushes the same place {@code GET .../queue/me} returns, every time it changes.
+ * A client uses one or the other, and {@code me} is not only the fallback for a lost stream: it is
+ * also where an admitted buyer gets a fresh token, since the token is minted from the slot on every
+ * read (ADR-0016) and the one a client was pushed is the same token.
  */
 @RestController
 @RequestMapping("/api/events/{eventId}/queue")
@@ -38,10 +41,12 @@ public class QueueController {
 
   private final QueueService queue;
   private final SaleCalendar calendar;
+  private final QueueStreams streams;
 
-  public QueueController(QueueService queue, SaleCalendar calendar) {
+  public QueueController(QueueService queue, SaleCalendar calendar, QueueStreams streams) {
     this.queue = queue;
     this.calendar = calendar;
+    this.streams = streams;
   }
 
   /**
@@ -69,6 +74,25 @@ public class QueueController {
     WaitingPlace waiting =
         queue.place(eventId, userId).orElseThrow(() -> new NotWaitingException(eventId, userId));
     return QueuePlaceResponse.of(waiting, onSaleAtOf(eventId));
+  }
+
+  /**
+   * Pushes where the caller stands, until there is nothing left to push.
+   *
+   * <p>The place is read here rather than inside the stream, because this is where an answer can
+   * still be an error: somebody who is not waiting is told so with the same 404 {@code me} gives,
+   * instead of being handed a stream that would never say anything. After that the connection is
+   * the answer, and it ends itself when the user is admitted or the sale sells out.
+   *
+   * <p>Nothing about the user's place changes by connecting. A client may open the stream, lose it
+   * and poll instead, and a client that does both is told the same thing twice rather than counted
+   * twice: a listener is a socket this pod holds, not a seat in the queue.
+   */
+  @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+  public SseEmitter stream(@PathVariable UUID eventId, @RequestHeader("X-User-Id") UUID userId) {
+    WaitingPlace waiting =
+        queue.place(eventId, userId).orElseThrow(() -> new NotWaitingException(eventId, userId));
+    return streams.open(waiting);
   }
 
   /**

@@ -182,7 +182,9 @@ Implements the lobby and the FIFO virtual waiting room.
 - **Estimated wait**: `position / observedAdmissionRate`, using a moving average of the actual admission rate. The rate is measured from how far `head` moved between two passes rather than from what one pod admitted, so it is the rate of the whole deployment; the configured `rate-per-second` is only the fallback before anything has been observed, which is the right guess precisely then, because a purchase area that is still empty really is admitting at its ceiling.
 - **Admission token**: signed JWT with `userId`, `eventId`, short TTL, pushed over SSE and also retrievable with a polling endpoint (`GET .../queue/me`) for clients that lost the stream. It is **minted on read from the slot, never stored** (ADR-0016): the expiry it carries is the score of the slot in `active:{evt:<id>}`, so the two end at the same instant, and a client that missed a push, lost its stream or reloaded the page gets a working admission simply by asking again. A buyer whose admission has lapsed is still reported as `ADMITTED` and handed no token, which is what tells a client its time is up rather than leaving it to wonder why its token stopped working.
 - **Slot release**: an active slot is freed when the admission token expires (sorted set scored by expiry) or when the user's order reaches a terminal state (consumes `order.events`).
-- **Sold-out**: when inventory reports `EventSoldOut`, every waiting client receives a `SOLD_OUT` SSE message and the queue is closed.
+- **Stream**: `GET .../queue/stream` pushes the same place `GET .../queue/me` answers, every time it changes. One pass per `seatrush.queue.position-update-interval` reads one number per sale, the admission head, and places every listener of that sale by subtracting it from the sequence they already hold; ten thousand clients on a pod cost one read rather than ten thousand. Only changes are sent: a position that has not moved is not news, and a listener that has heard nothing for `seatrush.sse.heartbeat-interval` gets a comment instead, which is what keeps a proxy from dropping the connection. The registry of listeners is per pod and deliberately so, since a connection belongs to the pod holding it; nothing of it is state, because the queue lives in Redis and a client that reconnects elsewhere is told the same thing.
+- **End of a stream**: an admission, an admission that has lapsed and a sold-out sale are all final. The stream sends the message and closes, so the connection goes back to the pool for the next sale rather than being held by somebody who is already shopping.
+- **Sold-out**: when the catalog reports the event as `SOLD_OUT`, every waiting client receives a `SOLD_OUT` SSE message and the waiting room is closed: the lobby set and the queue sorted set are deleted, which is where a flash on-sale left two hundred thousand members each. The status and not the `EventSoldOut` message is what this service follows, for the reason of ADR-0015: a status is true for every pod at every moment, while a message consumed once is known only to the pod that was running when it arrived. The counters and the per-user keys are left alone, the second lot because they expire by themselves and both because a client that polls after the sale closed still gets a coherent answer out of them.
 - Joining twice returns the existing position (idempotent join).
 
 ### 6.3 Inventory Service (`services/inventory-service`)
@@ -744,7 +746,7 @@ All endpoints are served through the gateway under `/api`. Errors follow **RFC 9
 |--------|------|------|-------------|
 | `POST` | `/api/events/{eventId}/queue` | JWT | Join (idempotent) → `{ state: LOBBY \| QUEUED \| ADMITTED, position? }` |
 | `GET` | `/api/events/{eventId}/queue/me` | JWT | Polling fallback: current state, position, admission token if admitted |
-| `GET` | `/api/events/{eventId}/queue/stream` | JWT | SSE: `POSITION {position, estimatedWaitSeconds}`, `ADMITTED {admissionToken, expiresAt}`, `SOLD_OUT` |
+| `GET` | `/api/events/{eventId}/queue/stream` | JWT | SSE: `POSITION {eventId, position, estimatedWaitSeconds}`, `ADMITTED {eventId, admissionToken, admissionExpiresAt}`, `SOLD_OUT {eventId}`. The field names are the ones `queue/me` answers with, so one parser serves both. 404 if the caller is not waiting; the stream ends itself on `ADMITTED` and on `SOLD_OUT` |
 | `DELETE` | `/api/events/{eventId}/queue` | JWT | Leave the queue |
 
 ### 12.4 Holds
@@ -876,7 +878,7 @@ Prometheus alert rules: `oversell_prevented > 0`, outbox lag > 5 s, SAGA past de
 | Late `PaymentAuthorized` after timeout | `VoidPayment` sent again; no captured payment for a failed order. |
 | Capture fails after seats committed | Retried with backoff; order stays `SEATS_COMMITTED`; alert fires if retries are exhausted. |
 | realtime pod dies | Clients reconnect (SSE `retry`), reload the snapshot, continue with deltas. |
-| queue pod dies | Queue state is in Redis; clients reconnect; admission job runs on any pod (guarded by a short Redis lock per event to avoid double admission per tick). |
+| queue pod dies | Queue state is in Redis; clients reconnect and are told the same thing by any pod; the admission job runs on every pod with no leader and no lock, because `ZPOPMIN` claims a buyer for exactly one caller ([§6.2](#62-queue-service-servicesqueue-service)). |
 | Poison message | Retries, then DLQ; alert fires. |
 
 ## 17. Testing Strategy
@@ -1114,6 +1116,7 @@ Main properties (all overridable via environment variables):
 | `seatrush.stream-relay.claim-idle-after` | inventory | `30s` | Pending entries are claimed from a dead consumer after this |
 | `seatrush.realtime.batch-window` | realtime | `200ms` | Delta batching window |
 | `seatrush.sse.heartbeat-interval` | queue, realtime | `15s` | SSE keep-alive comment |
+| `seatrush.sse.timeout` | queue, realtime | `30m` | How long one SSE stream may stay open before the client is asked to reconnect |
 | `seatrush.payment.decline-rate` | payment | `0.05` | Simulated decline rate |
 | `seatrush.payment.latency-p50` | payment | `300ms` | Simulated latency median |
 | `seatrush.payment.latency-p99` | payment | `1500ms` | Simulated latency tail |

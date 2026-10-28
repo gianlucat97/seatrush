@@ -11,11 +11,11 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * The queue service: the lobby, the FIFO waiting room and the admission of buyers (README section
  * 6.2).
  *
- * <p>What is here today is the lobby, the queue, the shuffle that drains one into the other when a
- * sale opens, the door that lets a bounded number of buyers through it with a signed admission, and
- * the three endpoints a client uses to join, read its place and leave. The SSE stream that pushes a
- * position instead of answering one, and the sold-out notice that closes a queue, arrive with the
- * feature that follows.
+ * <p>What is here is the lobby, the queue, the shuffle that drains one into the other when a sale
+ * opens, the door that lets a bounded number of buyers through it with a signed admission, the four
+ * endpoints of README section 12.3, and the stream that pushes a position instead of waiting to be
+ * asked for one, tells a buyer the moment they are let in and closes a waiting room when the sale
+ * it was for has nothing left to sell.
  *
  * <p>{@link AdmissionTokenConfiguration} is imported rather than auto-configured, which is how
  * {@code libs/security} contributes a signer only to the services that need one: this service and

@@ -162,6 +162,7 @@ class LobbyOpenerTest {
   }
 
   private static QueueProperties properties(int chunkSize) {
-    return new QueueProperties(Duration.ofSeconds(1), Duration.ofSeconds(1), chunkSize);
+    return new QueueProperties(
+        Duration.ofSeconds(1), Duration.ofSeconds(1), chunkSize, Duration.ofSeconds(3));
   }
 }

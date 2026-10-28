@@ -50,6 +50,15 @@ public interface QueueRegistry {
   AdmissionBatch admit(AdmitRequest request);
 
   /**
+   * The highest sequence the door has let through, 0 before the first admission.
+   *
+   * <p>One read that places every waiting user at once, which is what a stream pushing positions to
+   * thousands of them needs: their sequences cannot change, so the head is the only half of {@code
+   * sequence - head} that has to be asked for again.
+   */
+  long head(UUID eventId);
+
+  /**
    * Takes a user out of the lobby and out of the queue.
    *
    * @return whether they were anywhere to begin with
@@ -58,6 +67,19 @@ public interface QueueRegistry {
 
   /** Everybody currently in the lobby of an event, in no meaningful order. */
   List<UUID> lobby(UUID eventId);
+
+  /**
+   * Drops the lobby and the queue of a sale that is over.
+   *
+   * <p>What it frees is the two collections a flash on-sale fills: a set and a sorted set of two
+   * hundred thousand members each, for an event nobody can join any more. The counters and the
+   * per-user sequences are left where they are, the second lot because they expire by themselves
+   * and both because a client polling after the sale closed still gets a coherent answer out of
+   * them rather than a position that suddenly reads as if the queue had emptied.
+   *
+   * <p>Idempotent, like everything else here: every pod may close the same sale.
+   */
+  void close(UUID eventId);
 
   /**
    * Appends lobby members to the queue in the order given, skipping any who are already queued.

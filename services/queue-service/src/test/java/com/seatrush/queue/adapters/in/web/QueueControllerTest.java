@@ -46,6 +46,9 @@ class QueueControllerTest {
   @MockitoBean private QueueService queue;
   @MockitoBean private SaleCalendar calendar;
 
+  /** The stream of the same controller, which has its own test: this one is about the answers. */
+  @MockitoBean private QueueStreams streams;
+
   /**
    * The clock the admission signer needs.
    *
