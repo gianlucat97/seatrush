@@ -1052,6 +1052,13 @@ Conventions every module follows, so the code base stays consistent.
 - Commit messages are `Feature - <module> - <summary>` followed by a bullet list of what changed;
   the body of a pull request is that bullet list.
 - Features branch off `develop`, land through a pull request into `develop`, and reach `master` at a release.
+- Branch names are `feature/*`, `bugfix/*`, `test/*`, `master` or `develop`. A repository ruleset
+  refuses the creation of anything else, so the name is decided before the first push rather than
+  renamed afterwards.
+- The head branch of a merged pull request is deleted on `origin` by
+  [`delete-merged-branch.yml`](.github/workflows/delete-merged-branch.yml), and only for those
+  three short-lived prefixes. Local branches are never touched, and `master` and `develop` are
+  protected from deletion by the same ruleset that keeps them from being force pushed.
 - Every architectural decision that changes this specification gets an ADR and an update to this README.
 
 **Definition of done for a feature**
