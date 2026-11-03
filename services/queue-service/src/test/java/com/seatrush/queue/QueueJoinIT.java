@@ -47,14 +47,18 @@ import org.testcontainers.junit.jupiter.EnabledIfDockerAvailable;
  * in production is that Redis runs a script to completion, and the two concurrency tests below are
  * the ones that would notice if a script stopped doing that.
  *
- * <p>Both schedulers are pushed out of the way and driven by hand, so that a refresh or an opening
- * firing between an action and an assertion cannot turn a result into a race.
+ * <p>All three schedules are pushed out of the way and driven by hand, so that a pass firing
+ * between an action and an assertion cannot turn a result into a race. The door is the one that is
+ * easy to forget, because this class never opens it on purpose: left on its default of one second,
+ * it admits buyers out of the queue while a test is still asserting on what is in it, which makes
+ * these tests pass or fail on how quickly the machine running them gets through a thousand joins.
  */
 @SpringBootTest
 @TestPropertySource(
     properties = {
       "seatrush.queue.catalog-refresh-interval=1h",
-      "seatrush.queue.lobby-open-interval=1h"
+      "seatrush.queue.lobby-open-interval=1h",
+      "seatrush.admission.interval=1h"
     })
 @EnabledIfDockerAvailable
 class QueueJoinIT {
