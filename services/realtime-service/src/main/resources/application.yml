@@ -1,0 +1,79 @@
+# The defaults point at the Docker Compose stack of deploy/docker-compose, so the service
+# starts against make up with no configuration. Every value is overridable by environment
+# variable, which is how the container and the Helm chart set them (README section 22).
+spring:
+  application:
+    name: realtime-service
+  threads:
+    # Virtual threads: one batch pass writes to every connection of a sale in turn, and a client
+    # that cannot take a write must not be holding a platform thread while it fails to
+    # (section 19).
+    virtual:
+      enabled: true
+  kafka:
+    # Only inventory.seat-events is read, and nothing is written: this service changes nothing
+    # anybody else reads. The producer below exists for the dead letter topic alone, which is
+    # where a record the listener cannot handle ends up.
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      acks: all
+      properties:
+        enable.idempotence: true
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    consumer:
+      # No group id here on purpose. Every other service names its group in this file, because
+      # one group per service is what makes each message somebody's work; this one needs a group
+      # per pod, so the name is built at startup and the listener reads it from that bean
+      # (BroadcastConsumerGroup, README section 6.6).
+      #
+      # From now on, and never from the backlog: a client catches up by loading a snapshot, so
+      # the changes from before it connected are already in the map it is looking at. Replaying
+      # them would be a burst of deltas every client discards by version.
+      auto-offset-reset: latest
+      # The container commits the offset itself, after the handler has returned. It matters
+      # little here, since a new group starts at the end regardless, but a committed offset is
+      # what lets the consumer lag of README section 14.1 be read for this service too.
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+  jackson:
+    datatype:
+      datetime:
+        # Instants as ISO-8601 strings, the format README section 12 publishes. Set
+        # explicitly because it is part of the contract, not because Jackson 3 would
+        # default the other way. In Jackson 3 this switch moved out of the
+        # serialization features, so the key is no longer spring.jackson.serialization.
+        write-dates-as-timestamps: false
+
+seatrush:
+  realtime:
+    # How long seat changes accumulate before they go out as one delta. A fifth of a second is
+    # below what a person notices in a map that is being repainted anyway, and it turns the
+    # thousands of changes a second of a flash on-sale into five messages a second per client.
+    batch-window: ${SEATRUSH_REALTIME_BATCH_WINDOW:200ms}
+  sse:
+    # What a proxy or a mobile network needs to be told that a quiet stream is still alive. A
+    # seat map is quiet for whole minutes at a time, which is exactly when a connection is at
+    # risk of being dropped by something in the middle.
+    heartbeat-interval: ${SEATRUSH_SSE_HEARTBEAT_INTERVAL:15s}
+    # How long one stream may stay open. A client that went away without closing anything leaves
+    # a connection that looks open until something is written to it, and a spectator tab left
+    # open overnight is exactly that. The stream ends, the client reconnects and reloads a
+    # snapshot, and what a pod holds stays bounded.
+    timeout: ${SEATRUSH_SSE_TIMEOUT:30m}
+
+server:
+  port: ${SERVER_PORT:8085}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # Health for the container probe, info for the build it is running. The Prometheus
+        # endpoint arrives with the observability module.
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true

@@ -8,11 +8,12 @@ import org.springframework.context.annotation.Configuration;
 /**
  * Which service answers which path (README sections 6.1 and 12).
  *
- * <p>In Java rather than in YAML, because the order of these four entries is a rule and not a
- * setting: {@code /api/events/{id}/queue} belongs to queue-service and {@code /api/events/{id}}
- * belongs to inventory, so the narrower route has to be tried first. Written here, that is a
- * numbered list with the reason next to it; written in a properties file, it is two keys whose
- * relative order a reader has to know the framework to predict.
+ * <p>In Java rather than in YAML, because the order of these entries is a rule and not a setting:
+ * {@code /api/events/{id}/queue} belongs to queue-service, {@code /api/events/{id}/seatmap/stream}
+ * belongs to realtime-service and {@code /api/events/{id}} belongs to inventory, so the narrower
+ * routes have to be tried first. Written here, that is a numbered list with the reason next to it;
+ * written in a properties file, it is a handful of keys whose relative order a reader has to know
+ * the framework to predict.
  *
  * <p>Nothing is rewritten on the way through. Every service publishes the same {@code /api} paths
  * the gateway does, so a request routed through here and one sent straight to a service inside the
@@ -20,9 +21,10 @@ import org.springframework.context.annotation.Configuration;
  * The {@code /internal} endpoints of README section 12.7 are deliberately absent from this list:
  * they are reachable from inside the cluster and from nowhere else.
  *
- * <p>The seat map stream of section 12.2 is not here either. It belongs to realtime-service, which
- * arrives with the feature that pushes seat changes; the snapshot it is paired with is served by
- * inventory and is routed below like any other read.
+ * <p>The seat map of section 12.2 is the one resource two services answer for. The snapshot is a
+ * read of the map and belongs to inventory, which owns it; the stream of changes to it belongs to
+ * realtime-service, which owns nothing. A client uses both, one after the other, and neither path
+ * is rewritten on the way, so the two halves of that protocol are one path apart.
  */
 @Configuration(proxyBeanMethods = false)
 public class GatewayRoutes {
@@ -39,6 +41,11 @@ public class GatewayRoutes {
                     .order(0)
                     .path("/api/events/*/queue", "/api/events/*/queue/**")
                     .uri(downstream.queue()))
+        // The live half of the seat map, for the same reason: its path lives inside the event
+        // paths of inventory, which serves the snapshot the stream is applied to.
+        .route(
+            "seatmap-stream",
+            route -> route.order(5).path("/api/events/*/seatmap/stream").uri(downstream.realtime()))
         // Checkout and the tickets it issues.
         .route(
             "orders",
