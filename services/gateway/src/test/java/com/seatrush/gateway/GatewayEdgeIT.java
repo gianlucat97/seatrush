@@ -60,6 +60,7 @@ class GatewayEdgeIT {
   private static final StubService INVENTORY = new StubService("inventory");
   private static final StubService QUEUE = new StubService("queue");
   private static final StubService ORDERS = new StubService("order");
+  private static final StubService REALTIME = new StubService("realtime");
 
   @Autowired private WebTestClient client;
   @Autowired private UserTokenSigner users;
@@ -71,6 +72,7 @@ class GatewayEdgeIT {
     registry.add("seatrush.gateway.inventory", INVENTORY::url);
     registry.add("seatrush.gateway.queue", QUEUE::url);
     registry.add("seatrush.gateway.order", ORDERS::url);
+    registry.add("seatrush.gateway.realtime", REALTIME::url);
   }
 
   @AfterAll
@@ -78,6 +80,7 @@ class GatewayEdgeIT {
     INVENTORY.close();
     QUEUE.close();
     ORDERS.close();
+    REALTIME.close();
   }
 
   @BeforeEach
@@ -86,6 +89,7 @@ class GatewayEdgeIT {
     INVENTORY.forgetCalls();
     QUEUE.forgetCalls();
     ORDERS.forgetCalls();
+    REALTIME.forgetCalls();
   }
 
   @Test
@@ -150,6 +154,33 @@ class GatewayEdgeIT {
 
     get("/api/events/" + EVENT_ID, tokenOf(ADA, "Ada")).expectStatus().isOk();
     assertThat(INVENTORY.lastCall().path()).isEqualTo("/api/events/" + EVENT_ID);
+  }
+
+  /**
+   * The seat map is the one resource two services answer for: inventory owns the map and realtime
+   * owns the changes to it, and the two paths differ by one segment.
+   */
+  @Test
+  void sendsTheSeatMapStreamToRealtimeAndTheSnapshotToInventory() {
+    readOneEvent("/api/events/" + EVENT_ID + "/seatmap/stream", tokenOf(ADA, "Ada"));
+    assertThat(REALTIME.lastCall().path()).isEqualTo("/api/events/" + EVENT_ID + "/seatmap/stream");
+    assertThat(INVENTORY.lastCall()).as("the narrower route wins").isNull();
+
+    get("/api/events/" + EVENT_ID + "/seatmap", tokenOf(ADA, "Ada")).expectStatus().isOk();
+    assertThat(INVENTORY.lastCall().path()).isEqualTo("/api/events/" + EVENT_ID + "/seatmap");
+    assertThat(REALTIME.lastCall().path())
+        .as("the snapshot went to inventory and nothing new reached realtime")
+        .isEqualTo("/api/events/" + EVENT_ID + "/seatmap/stream");
+  }
+
+  /** Watching a seat map is a read: a spectator has no turn and needs none. */
+  @Test
+  void needsNoAdmissionToWatchASeatMap() {
+    readOneEvent("/api/events/" + EVENT_ID + "/seatmap/stream", tokenOf(ADA, "Ada"));
+
+    StubService.Call call = REALTIME.lastCall();
+    assertThat(call.userId()).isEqualTo(ADA.toString());
+    assertThat(call.admission()).isNull();
   }
 
   @Test
@@ -300,6 +331,29 @@ class GatewayEdgeIT {
 
     assertThat(firstEvents).hasSize(2);
     assertThat(firstEvents.getFirst()).contains("position");
+  }
+
+  /**
+   * Reads the first event of a stream and lets go of it, which is how a test asks a routing
+   * question of an endpoint whose answer never ends.
+   */
+  private void readOneEvent(String path, String token) {
+    List<String> first =
+        client
+            .get()
+            .uri(path)
+            .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+            .accept(MediaType.TEXT_EVENT_STREAM)
+            .exchange()
+            .expectStatus()
+            .isOk()
+            .returnResult(String.class)
+            .getResponseBody()
+            .take(1)
+            .collectList()
+            .block(Duration.ofSeconds(10));
+
+    assertThat(first).hasSize(1);
   }
 
   private WebTestClient.ResponseSpec get(String path, String token) {

@@ -34,6 +34,7 @@ seatrush:
     inventory: ${SEATRUSH_GATEWAY_INVENTORY_URL:http://localhost:8081}
     order: ${SEATRUSH_GATEWAY_ORDER_URL:http://localhost:8082}
     queue: ${SEATRUSH_GATEWAY_QUEUE_URL:http://localhost:8084}
+    realtime: ${SEATRUSH_GATEWAY_REALTIME_URL:http://localhost:8085}
   auth:
     # The HS256 secret user tokens are signed with, held by this service alone. Left empty here,
     # which makes the gateway generate one at startup and warn that it has: fine for one process

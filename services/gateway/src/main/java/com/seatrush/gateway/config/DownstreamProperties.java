@@ -8,7 +8,7 @@ import org.springframework.validation.annotation.Validated;
 /**
  * Where the services behind the gateway are (README section 22).
  *
- * <p>Three URLs and no discovery. On Kubernetes each of these is a service name, so the cluster
+ * <p>Four URLs and no discovery. On Kubernetes each of these is a service name, so the cluster
  * resolves them and nothing here has to know how many pods are behind one; locally they are the
  * ports of README section 23. A registry would be a moving part this system does not need, since
  * the set of services is fixed and known at build time.
@@ -16,10 +16,12 @@ import org.springframework.validation.annotation.Validated;
  * @param inventory events, the seat map and holds
  * @param queue the lobby, the waiting room and the admission a buyer leaves with
  * @param order checkout and the tickets it issues
+ * @param realtime the seat map stream, which is the only thing this service answers
  */
 @Validated
 @ConfigurationProperties(prefix = "seatrush.gateway")
 public record DownstreamProperties(
     @NotBlank @DefaultValue("http://localhost:8081") String inventory,
     @NotBlank @DefaultValue("http://localhost:8084") String queue,
-    @NotBlank @DefaultValue("http://localhost:8082") String order) {}
+    @NotBlank @DefaultValue("http://localhost:8082") String order,
+    @NotBlank @DefaultValue("http://localhost:8085") String realtime) {}

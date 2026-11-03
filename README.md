@@ -229,11 +229,13 @@ Simulates a payment service provider.
 
 Pushes live seat-map updates to clients.
 
-- Consumes `inventory.seat-events` with a **unique consumer group per pod** (broadcast pattern): every pod receives every seat event and serves its own connected clients. Starts from the latest offset; clients catch up via snapshot.
-- Keeps in-memory subscriber registries per event.
-- **Batches deltas** (default every 200 ms) to protect clients and network during bursts.
-- Each delta carries `fromVersion`/`toVersion` so clients can detect gaps and re-fetch the snapshot.
+- Consumes `inventory.seat-events` with a **unique consumer group per pod** (broadcast pattern): every pod receives every seat event and serves its own connected clients. Starts from the latest offset; clients catch up via snapshot. The group is named afresh at every start rather than after the pod, because what a starting pod wants is the changes from now on: a group that remembered an offset would replay minutes of seat events to clients holding a fresh snapshot, and every one of those deltas would be discarded by version on arrival.
+- Keeps in-memory subscriber registries per event. Two connections of the same user are two live streams, unlike the waiting room where the second replaces the first: a place in a queue is one per person, a seat map is the same for everybody.
+- **Batches deltas** (default every 200 ms) to protect clients and network during bursts. A window is a compression and not a buffer: a seat held and released inside one window is one line saying available, and a seat that moved four times is one line saying what it ended up being.
+- Each delta carries `fromVersion`/`toVersion` so clients can detect gaps and re-fetch the snapshot. Those two numbers are the whole of the protocol state, so nothing per client is kept here and a client can reconnect to any pod. They also make a redelivered seat event free: the pod drops it by version before it reaches a batch, which is the idempotency of [§9.5](#95-transactional-outbox-postgres-and-redis) done without a `processed_message` table, since this service owns no database.
+- `EventSoldOut` flushes the pending batch of that sale at once: the map will never move again, so the seats that took the last of it are not made to wait out a window nothing will arrive in.
 - Sends a heartbeat comment every 15 s to keep connections alive through proxies.
+- Holds no database, no Redis and no secret, and asks for no identity: the stream says the same thing to every client of a sale, and the gateway has already checked the JWT. A pod can be killed at any moment and the only consequence is that its clients reconnect, reload a snapshot and carry on.
 
 ### 6.7 Seat Map UI (`frontend/seat-map-ui`)
 
@@ -425,8 +427,9 @@ sequenceDiagram
 
 1. Client calls `GET /api/events/{id}/seatmap` → snapshot with `version`.
 2. Client opens `GET /api/events/{id}/seatmap/stream` (SSE).
-3. realtime-service sends batched deltas `{fromVersion, toVersion, changes:[{seatId, status}]}`.
+3. realtime-service sends batched deltas `{fromVersion, toVersion, changes:[{seatId, status}]}`. No event id: one stream is one seat map and the client named it in the URL it opened.
 4. Deltas with `toVersion` ≤ local version are ignored; if `fromVersion` > local version + 1 (gap), the client reloads the snapshot.
+5. A sale realtime has never heard of is a quiet stream rather than a 404: that service holds no catalog, so an unknown event and one where nothing is happening are indistinguishable from it, and a spectator who opens a venue before its sale begins is not turned away. The client has already been told by the snapshot it could not load.
 
 ## 9. Consistency and Concurrency Strategy
 
@@ -737,7 +740,7 @@ All endpoints are served through the gateway under `/api`. Errors follow **RFC 9
 | `GET` | `/api/events` | JWT | List events |
 | `GET` | `/api/events/{eventId}` | JWT | Event details with sections and prices |
 | `GET` | `/api/events/{eventId}/seatmap` | JWT | Snapshot `{ version, seats:[{id, sectionId, x, y, status}] }` |
-| `GET` | `/api/events/{eventId}/seatmap/stream` | JWT | SSE: `DELTA {fromVersion, toVersion, changes}` |
+| `GET` | `/api/events/{eventId}/seatmap/stream` | JWT | SSE: `DELTA {fromVersion, toVersion, changes}`. Served by realtime-service, which is why the gateway routes this one path away from inventory; no admission, since watching a map takes nothing from a sale |
 | `POST` | `/api/admin/events` | admin | Create an event with a generated layout `{ name, onSaleAt, sections:[{id, name, priceCents, currency, rows, seatsPerRow}] }` |
 | `POST` | `/api/admin/events/{eventId}/schedule` | admin | `DRAFT` → `SCHEDULED` (lobby opens) |
 | `POST` | `/api/admin/events/{eventId}/open` | admin | Force on-sale opening now (demos and benchmarks) |
@@ -1095,6 +1098,7 @@ Main properties (all overridable via environment variables):
 | `seatrush.gateway.inventory` | gateway | `http://localhost:8081` | Where inventory answers: events, the seat map and holds |
 | `seatrush.gateway.order` | gateway | `http://localhost:8082` | Where order-service answers |
 | `seatrush.gateway.queue` | gateway | `http://localhost:8084` | Where queue-service answers |
+| `seatrush.gateway.realtime` | gateway | `http://localhost:8085` | Where realtime-service answers: the seat map stream, and nothing else |
 | `seatrush.auth.secret` | gateway | none | Base64 HS256 secret (>= 32 bytes) user JWTs are signed with; a throwaway one is generated when unset |
 | `seatrush.auth.token-ttl` | gateway | `1h` | User JWT lifetime |
 | `seatrush.checkout.timeout` | order | `2m` | SAGA deadline before the pivot |
