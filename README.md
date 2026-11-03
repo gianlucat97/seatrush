@@ -242,7 +242,8 @@ Pushes live seat-map updates to clients.
 Minimal web client used for demos. TypeScript, React and Vite, with its own README in
 `frontend/seat-map-ui`.
 
-- Join the queue (lobby before opening), see position and estimated wait, get admitted or receive the sold-out notice.
+- Join the queue (lobby before opening), see position and estimated wait, get admitted or receive the sold-out notice. Six states and one panel, because an answer from [§12.3](#123-waiting-room) says which state somebody is in by which of its fields are present: `ADMITTED` with no token is a turn that came and went, and the answer to it is to join again rather than to wait or to retry. Joining is a button and never automatic, so a spectator takes no slot in anybody's purchase area.
+- Counts down what nobody will push. The waiting room stream ends itself when a buyer is admitted, so the moment their slot expires is something only the clock knows: the page says so before the gateway says it by refusing a hold.
 - Render the venue as an SVG seat map that updates live (available / held / sold, own hold highlighted). SVG and not a canvas, because a seat is a thing a person points at: a rectangle can already be clicked, focused and read out by a screen reader. The `viewBox` is measured from the seats themselves, so one component draws a club of two hundred seats and a stadium of fifty thousand.
 - Select seats, hold them (with countdown), check out, see order result and ticket.
 - **Spectator mode**: live seat map only, to watch a load test fill the venue in real time. It is the same page with the venue given the whole window, reached at `#/events/{id}/spectator` so that watching from a second browser is a link somebody can paste. A spectator signs in too: the gateway validates a token on every read, so there is no anonymous view of a seat map.

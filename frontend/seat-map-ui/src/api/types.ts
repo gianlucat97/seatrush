@@ -88,6 +88,47 @@ export interface SeatMapDelta {
   changes: SeatChange[];
 }
 
+/** Where a user stands in a waiting room (README section 12.3). */
+export type QueueState = 'LOBBY' | 'QUEUED' | 'ADMITTED';
+
+/**
+ * `POST`, `GET .../queue/me`: a place in the waiting room.
+ *
+ * Every field but the first two is absent rather than empty when it does not apply, and which ones
+ * are present is exactly what state the user is in: somebody in the lobby has no position because
+ * the shuffle has not happened, a queued user has an estimate and no token, and an admitted one has
+ * a token and nothing left to wait for.
+ *
+ * `ADMITTED` with no `admissionToken` is the one combination a client has to read as a state of its
+ * own: the buyer was let in and their time ran out. The absence is the signal to join again rather
+ * than to retry, which is why `phaseOf` in `queue/waitingRoom.ts` gives it a name.
+ */
+export interface QueuePlace {
+  eventId: string;
+  state: QueueState;
+  position?: number;
+  onSaleAt?: string;
+  estimatedWaitSeconds?: number;
+  admissionToken?: string;
+  admissionExpiresAt?: string;
+}
+
+/**
+ * One message of the waiting room stream (README section 12.3).
+ *
+ * The field names are the ones `queue/me` answers with, so one parser serves both. Which fields are
+ * present is decided by the name of the SSE event rather than by reading them: `POSITION` carries
+ * the two numbers a waiting client shows, `ADMITTED` carries the admission and its expiry, and
+ * `SOLD_OUT` carries nothing but the event it is about.
+ */
+export interface QueueUpdate {
+  eventId: string;
+  position?: number;
+  estimatedWaitSeconds?: number;
+  admissionToken?: string;
+  admissionExpiresAt?: string;
+}
+
 /** A refusal, as RFC 9457 Problem Details with the stable code of README section 12.6. */
 export interface ProblemDetails {
   type?: string;
