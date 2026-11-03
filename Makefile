@@ -11,7 +11,12 @@ COMPOSE_FILE ?= deploy/docker-compose/docker-compose.yml
 COMPOSE ?= docker compose --file $(COMPOSE_FILE) --env-file .env
 
 .DEFAULT_GOAL := help
-.PHONY: help format build test-it clean up down seed ui load-small check
+.PHONY: help format build test-it clean up down seed ui ui-build load-small check
+
+# The frontend is a Node project rather than a Maven module, so it has its own
+# install and its own build.
+UI_DIR ?= frontend/seat-map-ui
+NPM ?= npm
 
 help: ## Show this help
 	@grep -hE '^[a-z][a-z-]*:.*## ' $(MAKEFILE_LIST) \
@@ -43,8 +48,19 @@ down: .env ## Stop everything and remove the volumes
 seed: ## Create a demo event with 2,000 seats, on-sale in 2 minutes
 	@echo "make seed arrives with the inventory service (M1)."; exit 1
 
-ui: ## Start the seat map frontend
-	@echo "make ui arrives with the seat map UI (M4)."; exit 1
+ui: $(UI_DIR)/node_modules ## Start the seat map frontend on http://localhost:5173
+	$(NPM) --prefix $(UI_DIR) run dev
+
+ui-build: $(UI_DIR)/node_modules ## Format check, type check, unit tests and bundle of the frontend
+	$(NPM) --prefix $(UI_DIR) run format:check
+	$(NPM) --prefix $(UI_DIR) test
+	$(NPM) --prefix $(UI_DIR) run build
+
+# Installed from the lock file, so a checkout builds what CI builds. The directory
+# is the target, so a second make ui does not reinstall.
+$(UI_DIR)/node_modules: $(UI_DIR)/package-lock.json
+	$(NPM) --prefix $(UI_DIR) ci
+	@touch $@
 
 load-small: ## 5,000-user load test followed by the invariant checker
 	@echo "make load-small arrives with the benchmark suite (M7)."; exit 1

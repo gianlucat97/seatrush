@@ -53,6 +53,40 @@ jobs:
             prom/prometheus:v3.15.1 \
             check config /etc/prometheus/prometheus.yml
 
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/seat-map-ui/package-lock.json
+
+      # From the lock file, so CI builds the dependency tree a checkout builds.
+      - name: Install
+        run: npm ci
+        working-directory: frontend/seat-map-ui
+
+      # The same three gates the Java build has, in the same order: formatting,
+      # then the unit tests, then a build that type checks before it bundles.
+      - name: Prettier
+        run: npm run format:check
+        working-directory: frontend/seat-map-ui
+
+      - name: Test
+        run: npm test
+        working-directory: frontend/seat-map-ui
+
+      - name: Build
+        run: npm run build
+        working-directory: frontend/seat-map-ui
+
   verify:
     name: Build and test
     needs: format

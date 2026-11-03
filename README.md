@@ -239,12 +239,16 @@ Pushes live seat-map updates to clients.
 
 ### 6.7 Seat Map UI (`frontend/seat-map-ui`)
 
-Minimal web client used for demos.
+Minimal web client used for demos. TypeScript, React and Vite, with its own README in
+`frontend/seat-map-ui`.
 
 - Join the queue (lobby before opening), see position and estimated wait, get admitted or receive the sold-out notice.
-- Render the venue as an SVG seat map that updates live (available / held / sold, own hold highlighted).
+- Render the venue as an SVG seat map that updates live (available / held / sold, own hold highlighted). SVG and not a canvas, because a seat is a thing a person points at: a rectangle can already be clicked, focused and read out by a screen reader. The `viewBox` is measured from the seats themselves, so one component draws a club of two hundred seats and a stadium of fifty thousand.
 - Select seats, hold them (with countdown), check out, see order result and ticket.
-- **Spectator mode**: live seat map only, to watch a load test fill the venue in real time.
+- **Spectator mode**: live seat map only, to watch a load test fill the venue in real time. It is the same page with the venue given the whole window, reached at `#/events/{id}/spectator` so that watching from a second browser is a link somebody can paste. A spectator signs in too: the gateway validates a token on every read, so there is no anonymous view of a seat map.
+- The three rules of [§8.4](#84-live-seat-map) live in one pure module over a map and a delta, with no fetch and no framework in it, because being wrong about them would show somebody a seat that is gone as one they can buy. What decides when to apply them, including the reconnect, is the hook beside it.
+- Streams are read with `fetch` rather than with `EventSource`, which cannot set a header. The alternative was a credential in the query string, which every access log between the browser and the pod would keep.
+- The dev server proxies `/api` to the gateway, so the page always talks to its own origin. That is why there is no CORS configuration anywhere in this repository: in the deployed stack the page and the API are served from one origin, and a dev server that fetched the gateway directly would exercise a path production does not have.
 
 ## 7. Domain Model
 
@@ -959,8 +963,8 @@ Grafana screenshots and the Gatling report of each published run are stored in `
 | Database | PostgreSQL 17+, Flyway |
 | Real-time | Server-Sent Events |
 | Observability | Micrometer, Prometheus, Grafana, OpenTelemetry, Tempo |
-| Testing | JUnit Jupiter, AssertJ, Mockito, Testcontainers, REST Assured, ArchUnit, Gatling |
-| Code quality | Spotless (google-java-format), Error Prone, JaCoCo |
+| Testing | JUnit Jupiter, AssertJ, Mockito, Testcontainers, REST Assured, ArchUnit, Gatling; Vitest and Testing Library for the frontend |
+| Code quality | Spotless (google-java-format), Error Prone, JaCoCo; Prettier and the TypeScript compiler for the frontend |
 | Frontend | TypeScript, React, Vite, SVG seat map |
 | Containers | Docker, Jib for image builds |
 | Orchestration | Kubernetes, Helm, HPA, KEDA (scaling on Kafka lag) |
@@ -1142,7 +1146,8 @@ make build        # format check, compile, unit tests
 make test-it      # integration tests (Testcontainers)
 make up           # infrastructure + observability + all services (Docker Compose)
 make seed         # demo event with 2,000 seats, on-sale in 2 minutes
-make ui           # start the frontend
+make ui           # start the frontend (installs its dependencies on the first run)
+make ui-build     # format check, unit tests and bundle of the frontend
 make load-small   # 5,000-user load test followed by the invariant checker
 make check        # run the invariant checker alone
 make down         # stop everything and remove volumes
