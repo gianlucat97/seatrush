@@ -1,0 +1,399 @@
+/*
+ * The whole of the styling, in one file and with no framework.
+ *
+ * A demo client of four views does not need a design system, and a seat map is the only thing here
+ * with a real visual requirement: the three statuses have to be distinguishable at a glance in a
+ * grid of thousands, and distinguishable by more than hue, since a venue filling up is exactly the
+ * kind of green-to-red change that colour blindness hides. They differ in brightness as well.
+ */
+
+:root {
+  color-scheme: dark light;
+
+  --ink: #e8e9ed;
+  --ink-dim: #9aa0ad;
+  --ground: #14161c;
+  --raised: #1c1f27;
+  --line: #2b2f3a;
+  --accent: #5aa9ff;
+
+  --available: #3f8f5f;
+  --held: #d8a63c;
+  --sold: #8e2f3f;
+  --own: #5aa9ff;
+
+  --radius: 8px;
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+h1 {
+  font-size: 1.4rem;
+  margin: 0 0 0.25rem;
+}
+
+a {
+  color: var(--accent);
+}
+
+code {
+  background: var(--raised);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  font-size: 0.9em;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+/* The shell */
+
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--raised);
+}
+
+.brand {
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+  color: var(--ink);
+}
+
+.who {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--ink-dim);
+}
+
+.panel {
+  padding: 1.25rem;
+  max-width: 60rem;
+}
+
+.lead {
+  color: var(--ink-dim);
+  margin: 0 0 1rem;
+}
+
+.empty {
+  color: var(--ink-dim);
+  padding: 1rem 0;
+}
+
+button,
+input[type='text'],
+input:not([type]) {
+  font: inherit;
+}
+
+button {
+  background: var(--accent);
+  color: #06121f;
+  border: 0;
+  border-radius: var(--radius);
+  padding: 0.5rem 1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.link {
+  background: none;
+  color: var(--accent);
+  padding: 0 0.25rem;
+  font-weight: 500;
+  text-decoration: underline;
+}
+
+.error {
+  background: #3a1620;
+  border: 1px solid var(--sold);
+  border-radius: var(--radius);
+  color: #ffd9e0;
+  margin: 0.75rem 1.25rem 0;
+  padding: 0.6rem 0.9rem;
+}
+
+/* Sign in */
+
+.sign-in {
+  max-width: 28rem;
+  margin: 10vh auto 0;
+}
+
+.sign-in form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.sign-in input:not([type='checkbox']) {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--ink);
+  padding: 0.55rem 0.7rem;
+}
+
+.sign-in label {
+  color: var(--ink-dim);
+}
+
+.sign-in label.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.25rem 0 0.5rem;
+}
+
+/* The catalog */
+
+.events {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.events caption {
+  text-align: left;
+  color: var(--ink-dim);
+  padding-bottom: 0.5rem;
+}
+
+.events th,
+.events td {
+  border-bottom: 1px solid var(--line);
+  padding: 0.6rem 0.5rem;
+  vertical-align: baseline;
+}
+
+.events tbody th {
+  font-weight: 600;
+}
+
+.row-links {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.status {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-dim);
+  padding: 0.1rem 0.6rem;
+  font-size: 0.85rem;
+}
+
+.status-on_sale {
+  border-color: var(--available);
+  color: #8fe0ab;
+}
+
+.status-sold_out {
+  border-color: var(--sold);
+  color: #ffb3c0;
+}
+
+/* One event */
+
+.event {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1.25rem;
+  flex: 1;
+  min-height: 0;
+}
+
+.event-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.event-links {
+  display: flex;
+  gap: 1rem;
+}
+
+.totals {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.figure {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  padding: 0.4rem 0.9rem;
+  min-width: 7rem;
+}
+
+.figure-label {
+  display: block;
+  color: var(--ink-dim);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.figure-value {
+  font-size: 1.3rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.figure.status-available {
+  border-left-color: var(--available);
+}
+
+.figure.status-held {
+  border-left-color: var(--held);
+}
+
+.figure.status-sold {
+  border-left-color: var(--sold);
+}
+
+.figure.status-version {
+  border-left-color: var(--line);
+}
+
+/* What the stream is doing */
+
+.feed {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--ink-dim);
+  margin: 0;
+}
+
+.feed-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--ink-dim);
+}
+
+.feed-live .feed-dot {
+  background: var(--available);
+}
+
+.feed-reconnecting .feed-dot {
+  background: var(--held);
+}
+
+.feed-failed .feed-dot {
+  background: var(--sold);
+}
+
+.feed-note {
+  color: var(--ink-dim);
+}
+
+/* The venue */
+
+.map-frame {
+  flex: 1;
+  min-height: 24rem;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+  display: flex;
+}
+
+.seat-map {
+  width: 100%;
+  height: 100%;
+  /* The grid is drawn with a unit of one seat, so the stroke has to be in those units too. */
+  stroke-width: 0.06;
+}
+
+.seat {
+  stroke: none;
+}
+
+.seat-available {
+  fill: var(--available);
+}
+
+.seat-held {
+  fill: var(--held);
+}
+
+.seat-sold {
+  fill: var(--sold);
+}
+
+/* A seat this user holds, outlined rather than recoloured: it is still a held seat. */
+.seat-own {
+  stroke: var(--own);
+}
+
+.spectator .event-header h1 {
+  font-size: 1.1rem;
+}
+
+.spectator .map-frame {
+  min-height: 60vh;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --ink: #1b1d23;
+    --ink-dim: #5c6270;
+    --ground: #f4f5f8;
+    --raised: #ffffff;
+    --line: #dcdfe6;
+    --available: #2f7a4d;
+    --held: #b5811f;
+    --sold: #a3303f;
+  }
+
+  .error {
+    background: #fdeaee;
+    color: #5c1020;
+  }
+}
