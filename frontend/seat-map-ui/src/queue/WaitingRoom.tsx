@@ -1,6 +1,7 @@
 import { useNow } from '../clock';
 import type { EventStatus } from '../api/types';
-import { atTime, formatDuration, secondsLeft, secondsUntil, type WaitingPhase } from './phase';
+import { formatDuration, secondsLeft } from '../duration';
+import { atTime, secondsUntil, type WaitingPhase } from './phase';
 
 /**
  * The waiting room, as the person waiting in it sees it (README section 6.7).

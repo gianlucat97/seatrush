@@ -1,15 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { QueuePlace } from '../api/types';
-import {
-  applyUpdate,
-  atTime,
-  endsTheWait,
-  formatDuration,
-  isQueueEventName,
-  phaseOf,
-  secondsLeft,
-  secondsUntil,
-} from './phase';
+import { applyUpdate, atTime, endsTheWait, isQueueEventName, phaseOf, secondsUntil } from './phase';
 
 /**
  * Reading a place in a waiting room, where the interesting cases are absences.
@@ -189,13 +180,6 @@ describe('the clock running out', () => {
     expect(atTime({ kind: 'soldOut' }, Number.MAX_SAFE_INTEGER)).toEqual({ kind: 'soldOut' });
   });
 
-  it('counts the seconds left of an admission, and never below zero', () => {
-    expect(secondsLeft('2026-06-01T10:10:00Z', NOW)).toBe(600);
-    expect(secondsLeft('2026-06-01T10:00:30Z', NOW)).toBe(30);
-    expect(secondsLeft('2026-06-01T09:59:00Z', NOW)).toBe(0);
-    expect(secondsLeft('whenever', NOW)).toBe(0);
-  });
-
   /**
    * The lobby is drained by a scheduler and not by the clock striking, so a countdown that reached
    * zero would be claiming the shuffle has happened when it may be a moment away.
@@ -206,24 +190,5 @@ describe('the clock running out', () => {
     expect(secondsUntil('2026-06-01T09:00:00Z', NOW)).toBeNull();
     expect(secondsUntil(null, NOW)).toBeNull();
     expect(secondsUntil('whenever', NOW)).toBeNull();
-  });
-});
-
-describe('a duration', () => {
-  it('reads as minutes and seconds up to an hour', () => {
-    expect(formatDuration(0)).toBe('0:00');
-    expect(formatDuration(9)).toBe('0:09');
-    expect(formatDuration(600)).toBe('10:00');
-    expect(formatDuration(3599)).toBe('59:59');
-  });
-
-  /** Seconds in an estimate of an hour would be precision the estimate does not have. */
-  it('reads as hours and minutes beyond one', () => {
-    expect(formatDuration(3600)).toBe('1h 00m');
-    expect(formatDuration(7_265)).toBe('2h 01m');
-  });
-
-  it('never reads as a negative time', () => {
-    expect(formatDuration(-5)).toBe('0:00');
   });
 });
