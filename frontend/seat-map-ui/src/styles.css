@@ -332,6 +332,94 @@ button.link {
   color: var(--ink-dim);
 }
 
+/* The venue, and the waiting room beside it */
+
+.event-body {
+  display: flex;
+  gap: 0.75rem;
+  flex: 1;
+  min-height: 0;
+  align-items: stretch;
+}
+
+.event-aside {
+  flex: 0 0 20rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* One column once the venue and a panel no longer fit side by side. */
+@media (max-width: 60rem) {
+  .event-body {
+    flex-direction: column;
+  }
+
+  .event-aside {
+    flex: 0 0 auto;
+  }
+}
+
+.waiting {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-top-width: 3px;
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.waiting h2 {
+  font-size: 1.05rem;
+  margin: 0;
+}
+
+.waiting .lead {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.waiting-queued {
+  border-top-color: var(--accent);
+}
+
+.waiting-admitted {
+  border-top-color: var(--available);
+}
+
+.waiting-lapsed,
+.waiting-soldout {
+  border-top-color: var(--sold);
+}
+
+.countdown {
+  display: flex;
+  flex-direction: column;
+  margin: 0.25rem 0;
+}
+
+.countdown-value {
+  font-size: 2rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.countdown-label {
+  color: var(--ink-dim);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.error-inline {
+  color: #ffb3c0;
+  font-size: 0.9rem;
+  margin: 0;
+}
+
 /* The venue */
 
 .map-frame {
@@ -381,6 +469,10 @@ button.link {
 }
 
 @media (prefers-color-scheme: light) {
+  .error-inline {
+    color: #a3303f;
+  }
+
   :root {
     --ink: #1b1d23;
     --ink-dim: #5c6270;

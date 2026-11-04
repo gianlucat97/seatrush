@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ApiClient } from '../api/client';
 import type { EventDetails } from '../api/types';
+import { WaitingRoom } from '../queue/WaitingRoom';
+import { useWaitingRoom } from '../queue/useWaitingRoom';
 import { pathOf } from '../routing';
 import { SeatMap } from '../seatmap/SeatMap';
 import { totalsOf } from '../seatmap/protocol';
@@ -10,9 +12,13 @@ import { useSeatMap } from '../seatmap/useSeatMap';
  * One event: the live seat map, and what the numbers on it are doing.
  *
  * The same page serves both views of README section 6.7. Spectator mode is this page with the
- * venue given the whole width and no controls beside it, which is what a load test is watched on;
- * the buyer's view is the same map with room next to it for the waiting room and the checkout that
- * the next milestone puts there.
+ * venue given the whole width and nothing beside it, which is what a load test is watched on; the
+ * buyer's view is the same map with the waiting room next to it, and the seat selection and the
+ * checkout that the next feature puts under it.
+ *
+ * The waiting room is not asked for in spectator mode, and that is the only difference between the
+ * two views that matters. Watching a venue fill is a read, so a spectator never joins a queue,
+ * never takes a slot in a purchase area, and never shows up in the numbers a benchmark measures.
  *
  * The counters are not decoration. Available, held and sold, recomputed from the map itself,
  * are how a person watching sees that the deltas are arriving at all, and watching held climb and
@@ -29,6 +35,9 @@ export interface EventPageProps {
 export function EventPage({ client, eventId, spectator, onError }: EventPageProps) {
   const [event, setEvent] = useState<EventDetails | null>(null);
   const feed = useSeatMap(client, eventId);
+  // Null in spectator mode, which is what keeps a watcher out of the queue entirely: the hook is
+  // still mounted, so the rules of hooks are kept, and it follows nothing.
+  const waiting = useWaitingRoom(client, spectator ? null : eventId);
 
   const load = useCallback(async () => {
     try {
@@ -77,7 +86,21 @@ export function EventPage({ client, eventId, spectator, onError }: EventPageProp
         onReload={feed.reload}
       />
 
-      <div className="map-frame">{feed.state !== null && <SeatMap state={feed.state} />}</div>
+      <div className="event-body">
+        <div className="map-frame">{feed.state !== null && <SeatMap state={feed.state} />}</div>
+        {!spectator && (
+          <aside className="event-aside">
+            <WaitingRoom
+              phase={waiting.phase}
+              eventStatus={event?.status ?? null}
+              error={waiting.error}
+              busy={waiting.busy}
+              onJoin={() => void waiting.join()}
+              onLeave={() => void waiting.leave()}
+            />
+          </aside>
+        )}
+      </div>
     </main>
   );
 }

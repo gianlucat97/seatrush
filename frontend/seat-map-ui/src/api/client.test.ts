@@ -65,6 +65,68 @@ describe('a request', () => {
   });
 });
 
+describe('the waiting room', () => {
+  /** No Idempotency-Key: the user and the event are the key, so a second join is the same join. */
+  it('is joined with a post and nothing else', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(200, { eventId: 'evt-1', state: 'LOBBY' }));
+    const client = new ApiClient(() => 'a-token', fetchImpl as unknown as typeof fetch);
+
+    const place = await client.joinQueue('evt-1');
+
+    const [path, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe('/api/events/evt-1/queue');
+    expect(init.method).toBe('POST');
+    expect((init.headers as Record<string, string>)['Idempotency-Key']).toBeUndefined();
+    expect(init.body).toBeUndefined();
+    expect(place.state).toBe('LOBBY');
+  });
+
+  it('is asked where the caller stands', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(200, { eventId: 'evt-1', state: 'QUEUED', position: 7 }));
+    const client = new ApiClient(() => 'a-token', fetchImpl as unknown as typeof fetch);
+
+    const place = await client.queuePlace('evt-1');
+
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe('/api/events/evt-1/queue/me');
+    expect(place.position).toBe(7);
+  });
+
+  /** A 404 here is the answer and not a failure: it means the caller is not waiting. */
+  it('refuses a place for somebody who is not waiting, with the status that says so', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(404, { status: 404, code: 'NOT_FOUND' }));
+    const client = new ApiClient(() => 'a-token', fetchImpl as unknown as typeof fetch);
+
+    const failure = (await client
+      .queuePlace('evt-1')
+      .catch((thrown: unknown) => thrown)) as ApiError;
+
+    expect(failure.status).toBe(404);
+  });
+
+  it('is left with a delete that answers nothing', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    const client = new ApiClient(() => 'a-token', fetchImpl as unknown as typeof fetch);
+
+    await expect(client.leaveQueue('evt-1')).resolves.toBeUndefined();
+
+    const [path, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe('/api/events/evt-1/queue');
+    expect(init.method).toBe('DELETE');
+  });
+
+  it('names its stream path', () => {
+    expect(new ApiClient(() => null).queueStreamPath('evt-1')).toBe(
+      '/api/events/evt-1/queue/stream',
+    );
+  });
+});
+
 describe('a refusal', () => {
   it('keeps the stable code a page branches on', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(

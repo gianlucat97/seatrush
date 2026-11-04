@@ -3,6 +3,7 @@ import type {
   EventDetails,
   EventSummary,
   ProblemDetails,
+  QueuePlace,
   SeatMapSnapshot,
 } from './types';
 
@@ -92,6 +93,43 @@ export class ApiClient {
   /** The path of the delta stream, which is opened by {@link readEvents} and not by fetch here. */
   seatMapStreamPath(eventId: string): string {
     return `/api/events/${eventId}/seatmap/stream`;
+  }
+
+  /**
+   * Joins the waiting room, or returns the place the caller already has.
+   *
+   * Idempotent, and with no `Idempotency-Key` for that reason: the user and the event are the key,
+   * because a second join of the same sale by the same person cannot be a different request. It
+   * answers 200 either way, so a client that lost its connection mid-join simply asks again.
+   */
+  async joinQueue(eventId: string): Promise<QueuePlace> {
+    return this.send<QueuePlace>('POST', `/api/events/${eventId}/queue`);
+  }
+
+  /**
+   * Where the caller stands, for a client that has no stream or has just lost one.
+   *
+   * This is also where an admitted buyer gets a fresh admission, since the token is minted from the
+   * slot on every read rather than stored. A caller who is not waiting at all gets a 404, which is
+   * not an error worth reporting: it is the answer.
+   */
+  async queuePlace(eventId: string): Promise<QueuePlace> {
+    return this.send<QueuePlace>('GET', `/api/events/${eventId}/queue/me`);
+  }
+
+  /**
+   * Leaves the waiting room.
+   *
+   * 204 whether or not the caller was in it. A client leaving a queue is saying what it wants the
+   * state to be, and that state is reached either way.
+   */
+  async leaveQueue(eventId: string): Promise<void> {
+    await this.send<void>('DELETE', `/api/events/${eventId}/queue`);
+  }
+
+  /** The path of the waiting room stream, opened by {@link openStream} like the seat map's. */
+  queueStreamPath(eventId: string): string {
+    return `/api/events/${eventId}/queue/stream`;
   }
 
   /** Opens a streaming response, with the bearer token on it. */
