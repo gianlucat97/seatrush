@@ -14,6 +14,7 @@ import com.seatrush.messaging.messages.Message;
 import com.seatrush.messaging.messages.OrderConfirmed;
 import com.seatrush.messaging.messages.OrderFailed;
 import com.seatrush.messaging.messages.SeatsHeld;
+import com.seatrush.messaging.tracing.MessageTracing;
 import com.seatrush.queue.application.QueueService;
 import com.seatrush.testsupport.time.MutableClock;
 import java.time.Instant;
@@ -40,7 +41,8 @@ class OrderEventListenerTest {
   private final MessageCodec codec = new MessageCodec();
   private final MessageFactory messages = new MessageFactory(new UuidV7Generator(clock), clock);
   private final QueueService queue = mock(QueueService.class);
-  private final OrderEventListener listener = new OrderEventListener(queue, codec);
+  private final OrderEventListener listener =
+      new OrderEventListener(queue, codec, MessageTracing.none());
 
   @Test
   void givesTheSlotBackWhenAnOrderIsConfirmed() {

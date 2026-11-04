@@ -11,11 +11,13 @@ import com.seatrush.messaging.messages.CommitSeats;
 import com.seatrush.messaging.messages.PaymentAuthorized;
 import com.seatrush.messaging.messages.SampleMessages;
 import com.seatrush.messaging.messages.SeatsHeld;
+import com.seatrush.messaging.tracing.MessageTracing;
 import com.seatrush.testsupport.time.MutableClock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -45,6 +47,37 @@ class MessageFactoryTest {
 
     assertThat(first).isEqualTo(ON_SALE);
     assertThat(second).isEqualTo(ON_SALE.plus(Duration.ofMinutes(3)));
+  }
+
+  /**
+   * Captured here, inside the transaction that caused the message, and not by the relay that
+   * publishes the row: the context in hand at this moment is the request a buyer is waiting on,
+   * which is what makes a checkout one trace instead of one per scheduled tick.
+   */
+  @Test
+  void stampsTheTraceContextOfWhateverIsRunning() {
+    MessageFactory traced = new MessageFactory(ids, clock, fixedContext("00-aaaa-bbbb-01"));
+
+    assertThat(traced.wrap(SampleMessages.commitSeats()).trace()).contains("00-aaaa-bbbb-01");
+  }
+
+  /** A scheduled job, or a build with no tracer. The field is absent rather than null. */
+  @Test
+  void stampsNoTraceContextWhenThereIsNone() {
+    MessageEnvelope<CommitSeats> envelope = factory.wrap(SampleMessages.commitSeats());
+
+    assertThat(envelope.trace()).isEmpty();
+    assertThat(envelope.traceparent()).isNull();
+  }
+
+  /** A reply is produced inside the handler of what it answers, so it carries that context on. */
+  @Test
+  void carriesTheContextOnToAReply() {
+    MessageFactory traced = new MessageFactory(ids, clock, fixedContext("00-cccc-dddd-01"));
+    MessageEnvelope<CommitSeats> cause = traced.wrap(SampleMessages.commitSeats());
+
+    assertThat(traced.replyTo(cause, SampleMessages.seatsCommitted()).trace())
+        .contains("00-cccc-dddd-01");
   }
 
   @Test
@@ -134,6 +167,22 @@ class MessageFactoryTest {
         .isInstanceOf(NullPointerException.class);
     assertThatThrownBy(() -> factory.replyTo(factory.wrap(SampleMessages.commitSeats()), null))
         .isInstanceOf(NullPointerException.class);
+  }
+
+  /** Tracing that is always inside the same context, which is all the factory reads of it. */
+  private static MessageTracing fixedContext(String traceparent) {
+    return new MessageTracing() {
+
+      @Override
+      public Optional<String> capture() {
+        return Optional.of(traceparent);
+      }
+
+      @Override
+      public void continueFrom(MessageEnvelope<?> envelope, Runnable handler) {
+        handler.run();
+      }
+    };
   }
 
   /**

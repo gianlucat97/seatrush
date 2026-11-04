@@ -10,6 +10,7 @@ import com.seatrush.messaging.messages.PaymentDeclined;
 import com.seatrush.messaging.messages.PaymentVoided;
 import com.seatrush.messaging.messages.SeatsCommitFailed;
 import com.seatrush.messaging.messages.SeatsCommitted;
+import com.seatrush.messaging.tracing.MessageTracing;
 import com.seatrush.order.application.CheckoutSaga;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
@@ -36,9 +37,9 @@ public class SagaReplyListener {
 
   private final MessageRouter router;
 
-  public SagaReplyListener(CheckoutSaga saga, MessageCodec codec) {
+  public SagaReplyListener(CheckoutSaga saga, MessageCodec codec, MessageTracing tracing) {
     this.router =
-        MessageRouter.using(codec)
+        MessageRouter.using(codec, tracing)
             .handle(PaymentAuthorized.class, saga::onPaymentAuthorized)
             .handle(PaymentDeclined.class, saga::onPaymentDeclined)
             .handle(PaymentCaptured.class, saga::onPaymentCaptured)

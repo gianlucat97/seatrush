@@ -1,0 +1,23 @@
+# The trace datasource of README section 14.2. Provisioned like the Prometheus one, so a
+# checkout can be looked up by trace id in a Grafana that nobody configured.
+apiVersion: 1
+
+datasources:
+  - name: Tempo
+    uid: seatrush-tempo
+    type: tempo
+    access: proxy
+    # Inside the stack network; the published TEMPO_PORT is for the host only.
+    url: http://tempo:3200
+    jsonData:
+      # Follows a trace from a Prometheus exemplar or a log line to the trace itself, which is
+      # the only reason to name the other datasource here.
+      tracesToMetrics:
+        datasourceUid: seatrush-prometheus
+      # The service graph needs the metrics-generator, which deploy/tempo/tempo.yml
+      # deliberately does not run: the RED metrics of a service come from the service.
+      serviceMap:
+        datasourceUid: seatrush-prometheus
+      search:
+        hide: false
+    editable: false

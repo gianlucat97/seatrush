@@ -63,3 +63,25 @@ management:
     health:
       probes:
         enabled: true
+  tracing:
+    sampling:
+      # A trace is born here and nowhere else, which is what this number decides. Everything
+      # behind this service is reached either over HTTP, carrying the context in a header, or as
+      # a message, carrying it in the envelope, so every trace in the system starts with a
+      # request through this door (README section 6.1) and the other five services sample no
+      # roots at all.
+      #
+      # Everything, locally and on the bench. A flash on-sale is the one workload where keeping
+      # every trace is not an option in production, so this is a knob rather than a constant:
+      # the interesting traces of an on-sale are the slow and the failed ones, and sampling
+      # head-on at a tenth is how a benchmark loses exactly those.
+      probability: ${SEATRUSH_TRACING_SAMPLE_RATE:1.0}
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          # The collector of deploy/docker-compose, over the port it publishes to the host. A
+          # service started inside the stack network reaches it by name instead. There is no
+          # default: an endpoint left unset means no exporter at all, so a service would carry a
+          # trace through every hop and then drop it on the floor.
+          endpoint: ${SEATRUSH_OTLP_ENDPOINT:http://localhost:4318/v1/traces}

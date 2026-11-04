@@ -39,6 +39,15 @@
       <artifactId>slf4j-api</artifactId>
     </dependency>
 
+    <!-- The trace that crosses the outbox (README section 14.2). API only, like slf4j above: the
+         envelope and the router are shared by every service, and which backend exports a span is
+         the service's decision. A build with neither a Tracer nor a Propagator bean gets
+         MessageTracing.none() and stamps nothing. -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-tracing</artifactId>
+    </dependency>
+
     <!-- Everything below is optional: it belongs to the outbox half of this module, and the
          services that only produce or consume messages (realtime, queue, gateway) have no
          database and must not inherit a JDBC or a Kafka client by depending on the envelope.
@@ -78,6 +87,19 @@
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- A real backend for the tracing tests. The round trip of a traceparent is the whole
+         point of MicrometerMessageTracing, and a stub propagator would assert that this module
+         calls itself correctly rather than that a context survives the journey. -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-tracing-bridge-otel</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.opentelemetry</groupId>
+      <artifactId>opentelemetry-sdk</artifactId>
       <scope>test</scope>
     </dependency>
     <!-- The Kafka auto-configuration a service brings with its starter. The main code names it

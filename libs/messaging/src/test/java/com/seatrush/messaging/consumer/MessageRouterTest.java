@@ -15,6 +15,7 @@ import com.seatrush.messaging.messages.AuthorizePayment;
 import com.seatrush.messaging.messages.CapturePayment;
 import com.seatrush.messaging.messages.SampleMessages;
 import com.seatrush.messaging.messages.VoidPayment;
+import com.seatrush.messaging.tracing.MessageTracing;
 import com.seatrush.testsupport.time.MutableClock;
 import java.util.ArrayList;
 import java.util.List;
@@ -52,7 +53,9 @@ class MessageRouterTest {
   void givesTheHandlerTheWholeEnvelope() {
     List<MessageEnvelope<AuthorizePayment>> seen = new ArrayList<>();
     MessageRouter router =
-        MessageRouter.using(codec).handle(AuthorizePayment.class, seen::add).build();
+        MessageRouter.using(codec, MessageTracing.none())
+            .handle(AuthorizePayment.class, seen::add)
+            .build();
     MessageEnvelope<AuthorizePayment> sent = messages.wrap(SampleMessages.authorizePayment());
 
     router.route(codec.encodeToString(sent));
@@ -98,7 +101,7 @@ class MessageRouterTest {
   @Test
   void letsAFailureOfTheHandlerThrough() {
     MessageRouter router =
-        MessageRouter.using(codec)
+        MessageRouter.using(codec, MessageTracing.none())
             .handle(
                 AuthorizePayment.class,
                 envelope -> {
@@ -121,7 +124,8 @@ class MessageRouterTest {
   @Test
   void refusesTwoHandlersForOneType() {
     MessageRouter.Builder builder =
-        MessageRouter.using(codec).handle(CapturePayment.class, envelope -> {});
+        MessageRouter.using(codec, MessageTracing.none())
+            .handle(CapturePayment.class, envelope -> {});
 
     assertThatThrownBy(() -> builder.handle(CapturePayment.class, envelope -> {}))
         .isInstanceOf(IllegalStateException.class)
@@ -130,22 +134,87 @@ class MessageRouterTest {
 
   @Test
   void refusesARouterThatWouldParkEverything() {
-    assertThatThrownBy(() -> MessageRouter.using(codec).build())
+    assertThatThrownBy(() -> MessageRouter.using(codec, MessageTracing.none()).build())
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("no handlers");
   }
 
   @Test
   void refusesToBeBuiltWithoutWhatItNeeds() {
-    assertThatThrownBy(() -> MessageRouter.using(null)).isInstanceOf(NullPointerException.class);
-    assertThatThrownBy(() -> MessageRouter.using(codec).handle(null, envelope -> {}))
+    assertThatThrownBy(() -> MessageRouter.using(null, MessageTracing.none()))
         .isInstanceOf(NullPointerException.class);
-    assertThatThrownBy(() -> MessageRouter.using(codec).handle(CapturePayment.class, null))
+    assertThatThrownBy(() -> MessageRouter.using(codec, null))
+        .isInstanceOf(NullPointerException.class);
+    assertThatThrownBy(
+            () -> MessageRouter.using(codec, MessageTracing.none()).handle(null, envelope -> {}))
+        .isInstanceOf(NullPointerException.class);
+    assertThatThrownBy(
+            () ->
+                MessageRouter.using(codec, MessageTracing.none())
+                    .handle(CapturePayment.class, null))
         .isInstanceOf(NullPointerException.class);
   }
 
+  /**
+   * Every listener in the system routes through here, which is why the continuation of README
+   * section 14.2 lives here: a handler that ran outside it would be a service missing from the
+   * trace of a checkout, and nothing would fail.
+   */
+  @Test
+  void runsEveryHandlerInsideTheTraceThatProducedTheMessage() {
+    RecordingTracing tracing = new RecordingTracing();
+    MessageRouter router =
+        MessageRouter.using(codec, tracing)
+            .handle(AuthorizePayment.class, envelope -> handled.add("authorize"))
+            .build();
+
+    router.route(codec.encodeToString(messages.wrap(SampleMessages.authorizePayment())));
+
+    assertThat(handled).containsExactly("authorize");
+    assertThat(tracing.continued).containsExactly("AuthorizePayment");
+  }
+
+  /**
+   * A type nobody handles is refused before a span is opened: it is not work this service did, so a
+   * span for it would put a failure in the trace of the flow that produced it and suggest the
+   * handler ran and threw.
+   */
+  @Test
+  void opensNoSpanForATypeNobodyHandles() {
+    RecordingTracing tracing = new RecordingTracing();
+    MessageRouter router =
+        MessageRouter.using(codec, tracing)
+            .handle(CapturePayment.class, envelope -> handled.add("capture"))
+            .build();
+
+    assertThatThrownBy(
+            () ->
+                router.route(
+                    codec.encodeToString(messages.wrap(SampleMessages.authorizePayment()))))
+        .isInstanceOf(UnhandledMessageTypeException.class);
+
+    assertThat(tracing.continued).isEmpty();
+  }
+
+  /** Records what it was asked to continue, and runs the work like the no-op does. */
+  private static final class RecordingTracing implements MessageTracing {
+
+    private final List<String> continued = new ArrayList<>();
+
+    @Override
+    public java.util.Optional<String> capture() {
+      return java.util.Optional.empty();
+    }
+
+    @Override
+    public void continueFrom(com.seatrush.messaging.MessageEnvelope<?> envelope, Runnable handler) {
+      continued.add(envelope.type());
+      handler.run();
+    }
+  }
+
   private MessageRouter twoHandlers() {
-    return MessageRouter.using(codec)
+    return MessageRouter.using(codec, MessageTracing.none())
         .handle(AuthorizePayment.class, envelope -> handled.add("authorize"))
         .handle(CapturePayment.class, envelope -> handled.add("capture"))
         .build();

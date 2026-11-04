@@ -17,6 +17,7 @@ import com.seatrush.messaging.messages.Message;
 import com.seatrush.messaging.messages.SeatsHeld;
 import com.seatrush.messaging.messages.SeatsReleased;
 import com.seatrush.messaging.messages.SeatsSold;
+import com.seatrush.messaging.tracing.MessageTracing;
 import com.seatrush.realtime.application.SeatMapDeltas;
 import com.seatrush.realtime.domain.SeatMapChange;
 import com.seatrush.realtime.domain.SeatStatus;
@@ -46,7 +47,8 @@ class SeatEventListenerTest {
   private final MessageCodec codec = new MessageCodec();
   private final MessageFactory messages = new MessageFactory(new UuidV7Generator(clock), clock);
   private final SeatMapDeltas deltas = mock(SeatMapDeltas.class);
-  private final SeatEventListener listener = new SeatEventListener(deltas, codec);
+  private final SeatEventListener listener =
+      new SeatEventListener(deltas, codec, MessageTracing.none());
 
   @Test
   void turnsAHoldIntoSeatsThatAreTaken() {

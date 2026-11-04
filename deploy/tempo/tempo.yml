@@ -1,0 +1,48 @@
+# The trace store of the local stack (README section 14.2).
+#
+# Mounted read-only into the Tempo container. A single process holding every role, which is
+# what Tempo calls monolithic mode: a demo and a benchmark of one machine have no use for a
+# distributor, an ingester and a querier that can be scaled apart.
+
+# So Grafana can stream a trace as its spans arrive instead of waiting for the whole of it.
+stream_over_http_enabled: true
+
+server:
+  http_listen_port: 3200
+  log_level: warn
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        # HTTP only, which is what the OTLP exporter of the services is pointed at. gRPC is
+        # the other half of the same protocol and would be a second port open for nothing:
+        # the services all speak one, and the one they speak travels through a proxy.
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  # A trace is cut this long after its last span, and a cut trace is one a query can find in
+  # a block rather than only in memory. Short, because the thing being looked at here is a
+  # checkout that takes a second: waiting the default thirty seconds to see it would make
+  # tracing useless exactly during a demo.
+  trace_idle_period: 5s
+  max_block_duration: 1m
+
+compactor:
+  compaction:
+    # Local traces are worth keeping for an afternoon of demos and no longer. The volume is
+    # removed by make down in any case, so this only bounds a stack left running.
+    block_retention: 6h
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks
+
+# No metrics-generator. It would turn spans into RED metrics, which Prometheus already has
+# from the services themselves (README section 14.1), and the two would disagree whenever a
+# trace was sampled out.

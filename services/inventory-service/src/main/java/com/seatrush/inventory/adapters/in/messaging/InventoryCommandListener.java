@@ -6,6 +6,7 @@ import com.seatrush.messaging.Topics;
 import com.seatrush.messaging.consumer.MessageRouter;
 import com.seatrush.messaging.messages.CommitSeats;
 import com.seatrush.messaging.messages.ReleaseHold;
+import com.seatrush.messaging.tracing.MessageTracing;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,9 +30,10 @@ public class InventoryCommandListener {
 
   private final MessageRouter router;
 
-  public InventoryCommandListener(CheckoutCommandService commands, MessageCodec codec) {
+  public InventoryCommandListener(
+      CheckoutCommandService commands, MessageCodec codec, MessageTracing tracing) {
     this.router =
-        MessageRouter.using(codec)
+        MessageRouter.using(codec, tracing)
             .handle(CommitSeats.class, commands::commit)
             .handle(ReleaseHold.class, commands::release)
             .build();

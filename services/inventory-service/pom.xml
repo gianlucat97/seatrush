@@ -67,6 +67,15 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-actuator</artifactId>
     </dependency>
+    <!-- One trace across every service of a checkout (README section 14.2). The starter is the
+         whole of it: the auto-configuration that builds a Tracer and a Propagator, the bridge
+         that makes them OpenTelemetry, and the OTLP exporter that ships finished spans to the
+         collector. Those two beans are also what seatrush-messaging carries a trace across the
+         outbox with; without this starter it finds neither and stamps nothing. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-opentelemetry</artifactId>
+    </dependency>
     <dependency>
       <groupId>org.postgresql</groupId>
       <artifactId>postgresql</artifactId>
