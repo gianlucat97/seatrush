@@ -3,10 +3,8 @@
 The demo client of SeatRush ([README section 6.7](../../README.md#67-seat-map-ui-frontendseat-map-ui)): sign
 in, pick an event, and watch its seat map move while a sale happens.
 
-What is here is the live map, spectator mode and the waiting room. The seat selection and the
-checkout arrive with the next feature; the pieces they need are already in place, which is why
-`SeatMap` takes an `onSelect` and an `ownSeatIds` nothing passes yet, and why the admission token
-the waiting room hands out has no caller yet.
+What is here is the live map, spectator mode, the waiting room and the purchase: picking seats,
+holding them, paying, and the signed ticket at the end of it.
 
 ## Running it
 
@@ -82,23 +80,105 @@ is what [`src/clock.ts`](src/clock.ts) and `atTime` are for.
 Joining is not automatic. It is a thing a person does, so it is a button, and a spectator never
 joins at all: watching a venue fill is a read, so it takes no slot in anybody's purchase area.
 
+## How the checkout works
+
+Three commands and one loop ([README section 8.3](../../README.md#83-checkout-saga-orchestrated)).
+The commands are the three the gateway demands an admission on, which is why the token is an
+argument to them in [`src/api/client.ts`](src/api/client.ts) rather than something the client
+carries like the bearer token: a turn is not an identity. The loop is the one that follows the
+order afterwards, and it needs no turn at all.
+
+1. `POST /api/events/{id}/holds` takes the seats, all of them or none.
+2. `POST /api/orders` turns the hold into a checkout and answers `202`: what exists at that moment
+   is a SAGA, not a purchase.
+3. `GET /api/orders/{id}` is read until the status is terminal. There is no order stream in the
+   API, and the `Location` header is the API saying as much.
+
+### The pivot is the only thing this panel has to get right
+
+`CommitSeats` is the point the SAGA cannot come back from. Before it, a failure releases the hold
+and voids the payment; from it on, the only step left is a capture that is retried until it
+succeeds. So the panel says two different things and must not confuse them. Before the pivot it
+says the payment is being authorized and promises nothing. From `SEATS_COMMITTED` on it says the
+seats are the buyer's, because they are, even though the order is not confirmed yet: an order
+sitting there because a payment provider is slow is a buyer who owns their seats and is waiting
+for paper.
+
+`COMPENSATING` is the mirror of that. It can only reach `FAILED`, so it is an outcome rather than
+more waiting, and the panel says what went wrong while the system is still undoing it.
+
+That reading is in [`src/checkout/purchase.ts`](src/checkout/purchase.ts), as a tagged union over
+the six statuses of README section 7 with no fetch in it.
+
+### What an idempotency key is for
+
+A key identifies one intent, so it has to survive the failure it exists to cover and must not
+survive anything else. A new key on a retry after a timeout is how a buyer ends up holding two sets
+of seats. A key kept after a definite answer is how a buyer who picks the same seats again, an
+expired hold later, gets handed back the dead hold from the first attempt.
+
+So a key in [`src/checkout/useCheckout.ts`](src/checkout/useCheckout.ts) lives exactly as long as
+an unresolved attempt: minted when a command goes out, kept when the failure leaves the outcome
+unknown, dropped the moment the server says anything definite. README section 12.6 names the case
+it exists for: a `503` is safe to retry with the same key.
+
+### Two refusals that are not errors
+
+- `HOLD_LIMIT_REACHED` carries the `holdId` of the hold the buyer already has, and adopting it is
+  the answer. No endpoint answers "my hold for this sale", so this refusal is the only way a page
+  that lost its hold id ever gets it back: a buyer who reloaded mid-hold recovers by asking for
+  seats and being told which ones are already theirs.
+- `SEAT_UNAVAILABLE` carries the seats that went. The rest of the selection survives, so losing one
+  seat of six is one more click rather than starting again.
+
+### The selection is pruned by the seat map
+
+The map moves under a selection by design, and a hold is all or nothing, so a selection holding one
+seat somebody else took is a checkout that cannot start. Every version of the map therefore takes
+out of the selection whatever is no longer available, which is in
+[`src/checkout/selection.ts`](src/checkout/selection.ts) with the other two rules: a seat can be
+added only while it is available and the selection is under the limit, and a picked seat can always
+be removed whatever has happened to it since.
+
+### A hold outlives a turn, and so does an order
+
+A hold lasts five minutes and an admission ten, so a hold taken late in a turn can still be live
+when the turn ends. The seats are held and cannot be paid for, which the panel says rather than
+leaving a button that would be refused.
+
+An order is different: the admission is spent when it is created, and reading one takes no turn. A
+buyer whose slot expired mid-SAGA keeps watching their order reach `CONFIRMED` and still collects
+their tickets, which is why the panel stays on the page once anything is underway.
+
+### The ticket
+
+Shown as the signed payload itself rather than as a QR code. The payload is the ticket, Ed25519
+signed and verifiable offline ([README section 13](../../README.md#13-security)), and an encoder
+for the picture of it would be a dependency that demonstrates nothing this does not.
+
 ## Layout
 
 ```
 src/
-├── api/        the wire types, the fetch client, the session, the SSE reader
-├── seatmap/    the snapshot and delta protocol, the hook that drives it, the SVG
-├── queue/      the six states of a waiting room, the hook that follows them, the panel
-├── pages/      sign in, the catalog, one event
-├── App.tsx     the shell: the session, and what a 401 means
-├── clock.ts    now, re-read on an interval, for the two countdowns
-└── routing.ts  three views in the URL fragment
+├── api/         the wire types, the fetch client, the session, the SSE reader
+├── seatmap/     the snapshot and delta protocol, the hook that drives it, the SVG
+├── queue/       the six states of a waiting room, the hook that follows them, the panel
+├── checkout/    the selection rules, the ten states of a purchase, the hook, the panel
+├── pages/       sign in, the catalog, one event
+├── App.tsx      the shell: the session, and what a 401 means
+├── clock.ts     now, re-read on an interval
+├── duration.ts  the seconds left of an instant, and how a person reads them
+└── routing.ts   three views in the URL fragment
 ```
 
 ## Two browsers, one venue
 
 The point of spectator mode. Sign in as two different names in two windows, open the same event in
 both, and hold a seat in one: the other repaints it within a batch window.
+
+It is also how the race is worth watching. Pick the same seat in both windows and hold in both: one
+gets the seat, the other is told which seat went and keeps the rest of its selection, because a
+hold is all or nothing and `SEAT_UNAVAILABLE` says which seat it was.
 
 It is also how the fairness of the queue is worth watching. Lower the purchase area to one
 (`SEATRUSH_ADMISSION_MAX_ACTIVE_USERS=1`), have three windows join the lobby of a sale that has not

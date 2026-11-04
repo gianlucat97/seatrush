@@ -2,6 +2,8 @@ import type {
   DemoLogin,
   EventDetails,
   EventSummary,
+  Hold,
+  Order,
   ProblemDetails,
   QueuePlace,
   SeatMapSnapshot,
@@ -132,6 +134,82 @@ export class ApiClient {
     return `/api/events/${eventId}/queue/stream`;
   }
 
+  /**
+   * Holds seats, all of them or none (README section 12.4).
+   *
+   * One of the three commands of the purchase area, which is why the admission is an argument here
+   * rather than something the client carries like the bearer token. A turn is not an identity: it
+   * belongs to one sale, it lasts minutes, and the three calls that spend it are the three the
+   * gateway demands it on. Making it a parameter is what makes that list visible in this file
+   * instead of implicit in a header somebody has to remember to set.
+   *
+   * The idempotency key is the caller's to choose and to keep. A retry after a timeout must carry
+   * the key of the attempt it is retrying, or the buyer ends up holding two sets of seats; see
+   * `keyFor` in `checkout/useCheckout.ts` for where this one comes from.
+   */
+  async placeHold(
+    eventId: string,
+    seatIds: string[],
+    idempotencyKey: string,
+    admissionToken: string,
+  ): Promise<Hold> {
+    return this.send<Hold>(
+      'POST',
+      `/api/events/${eventId}/holds`,
+      { seatIds },
+      { 'Idempotency-Key': idempotencyKey, 'X-Admission-Token': admissionToken },
+    );
+  }
+
+  /**
+   * One hold, which only its owner may read.
+   *
+   * A read, so it needs no admission: a buyer whose turn has lapsed can still see what they hold
+   * until it expires.
+   */
+  async hold(holdId: string): Promise<Hold> {
+    return this.send<Hold>('GET', `/api/holds/${holdId}`);
+  }
+
+  /** Gives the seats back early, which is a purchase command and so needs the turn. */
+  async releaseHold(holdId: string, admissionToken: string): Promise<void> {
+    await this.send<void>('DELETE', `/api/holds/${holdId}`, undefined, {
+      'X-Admission-Token': admissionToken,
+    });
+  }
+
+  /**
+   * Turns a hold into a checkout (README section 12.5).
+   *
+   * Answers `202` and not `201`: what exists at that moment is a SAGA, not a purchase. The seats
+   * are frozen and the payment is on its way out, and the client follows {@link order} until the
+   * status is terminal.
+   */
+  async startCheckout(
+    holdId: string,
+    idempotencyKey: string,
+    admissionToken: string,
+  ): Promise<Order> {
+    return this.send<Order>(
+      'POST',
+      '/api/orders',
+      { holdId },
+      { 'Idempotency-Key': idempotencyKey, 'X-Admission-Token': admissionToken },
+    );
+  }
+
+  /**
+   * One order, which only its owner may read.
+   *
+   * A read as well, and that is what makes a checkout survive a turn running out: the admission is
+   * spent the moment the order is created, and from then on the SAGA is between order-service and
+   * the rest of the system. A buyer can follow it, and collect the tickets, long after the queue
+   * has forgotten them.
+   */
+  async order(orderId: string): Promise<Order> {
+    return this.send<Order>('GET', `/api/orders/${orderId}`);
+  }
+
   /** Opens a streaming response, with the bearer token on it. */
   async openStream(path: string, signal: AbortSignal): Promise<Response> {
     const response = await this.fetchImpl(path, {
@@ -145,8 +223,17 @@ export class ApiClient {
     return response;
   }
 
-  private async send<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const headers: Record<string, string> = { Accept: 'application/json', ...this.authorization() };
+  private async send<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    extra: Record<string, string> = {},
+  ): Promise<T> {
+    const headers: Record<string, string> = {
+      Accept: 'application/json',
+      ...this.authorization(),
+      ...extra,
+    };
     if (body !== undefined) {
       headers['Content-Type'] = 'application/json';
     }

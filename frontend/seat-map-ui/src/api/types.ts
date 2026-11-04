@@ -129,11 +129,95 @@ export interface QueueUpdate {
   admissionExpiresAt?: string;
 }
 
-/** A refusal, as RFC 9457 Problem Details with the stable code of README section 12.6. */
+/**
+ * `POST /api/events/{id}/holds`, `GET /api/holds/{id}`: seats that are this buyer's for a while.
+ *
+ * `expiresAt` is the whole of what makes a hold a hold (README section 12.4). It arrives once and
+ * nothing announces its passing, so the page counts it down and stops offering a checkout when it
+ * reaches zero, rather than waiting for inventory's sweeper to refuse one.
+ *
+ * `version` is present only on a hold that was just taken: it is the seat map version this hold
+ * produced, which places it in the sequence of deltas a client is already following.
+ */
+export interface Hold {
+  holdId: string;
+  eventId: string;
+  seatIds: string[];
+  expiresAt: string;
+  status: string;
+  version?: number;
+}
+
+/**
+ * Where a checkout has got to (README section 7).
+ *
+ * The order of these is the order of the SAGA, and the one boundary that matters to a page is
+ * between `PAYMENT_AUTHORIZED` and `SEATS_COMMITTED`: the commit is the pivot, so everything before
+ * it can still be undone and everything from it on can only move forward. A client that drew those
+ * two sides the same way would either promise seats it may lose or doubt a sale that is already
+ * made.
+ */
+export type OrderStatus =
+  'PENDING' | 'PAYMENT_AUTHORIZED' | 'SEATS_COMMITTED' | 'CONFIRMED' | 'COMPENSATING' | 'FAILED';
+
+/** Why a checkout ended in `FAILED`, as a closed set so the page and the metrics agree. */
+export type FailureReason = 'PAYMENT_DECLINED' | 'SEATS_UNAVAILABLE' | 'TIMEOUT';
+
+/** One seat of an order, with the price it was sold at rather than the price it is listed at. */
+export interface OrderItem {
+  seatId: string;
+  price: Money;
+}
+
+/**
+ * One ticket of a confirmed order (README section 13).
+ *
+ * `signedPayload` is the ticket: the event, the seat and the ticket id signed with Ed25519, which
+ * is what a gate verifies offline. The three fields beside it are the same values in the clear, so
+ * a page showing somebody their own order does not have to open a signature to print a seat on it.
+ */
+export interface Ticket {
+  ticketId: string;
+  seatId: string;
+  signedPayload: string;
+  issuedAt: string;
+}
+
+/**
+ * `POST /api/orders`, `GET /api/orders/{id}`: a checkout and, in the end, a purchase.
+ *
+ * `failureReason` and `tickets` are absent rather than empty when they do not apply, which is the
+ * same convention as a place in the queue: an order still checking out carries no empty ticket
+ * array, so their presence is the question to ask and not their length.
+ */
+export interface Order {
+  orderId: string;
+  eventId: string;
+  holdId: string;
+  status: OrderStatus;
+  failureReason?: FailureReason;
+  items: OrderItem[];
+  total: Money;
+  createdAt: string;
+  tickets?: Ticket[];
+}
+
+/**
+ * A refusal, as RFC 9457 Problem Details with the stable code of README section 12.6.
+ *
+ * The three members after `code` are the ones this client acts on rather than prints. A refused
+ * hold says which seats went, and a buyer who already holds seats is told which hold they have,
+ * which is the only way a page that lost its hold id gets it back. They are typed as `unknown`
+ * because they come out of a parsed body: the readers in `checkout/purchase.ts` are what turn them
+ * into seats and an id, or into nothing.
+ */
 export interface ProblemDetails {
   type?: string;
   title?: string;
   status?: number;
   detail?: string;
   code?: string;
+  conflictingSeatIds?: unknown;
+  unknownSeatIds?: unknown;
+  holdId?: unknown;
 }

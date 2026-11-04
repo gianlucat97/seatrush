@@ -133,33 +133,6 @@ export function atTime(phase: WaitingPhase, now: number): WaitingPhase {
   return expiresAt <= now ? { kind: 'lapsed' } : phase;
 }
 
-/** How many whole seconds are left of an admission, never below zero. */
-export function secondsLeft(expiresAt: string, now: number): number {
-  const parsed = Date.parse(expiresAt);
-  if (Number.isNaN(parsed)) {
-    return 0;
-  }
-  return Math.max(0, Math.ceil((parsed - now) / 1000));
-}
-
-/**
- * A duration as a person reads one.
- *
- * Minutes and seconds up to an hour, then hours and minutes, because the two numbers this shows are
- * an admission that lasts ten minutes and a queue that can be an hour long. Seconds in an estimate
- * of an hour would be precision the estimate does not have.
- */
-export function formatDuration(seconds: number): string {
-  const whole = Math.max(0, Math.floor(seconds));
-  if (whole < 3600) {
-    const minutes = Math.floor(whole / 60);
-    return `${minutes}:${String(whole % 60).padStart(2, '0')}`;
-  }
-  const hours = Math.floor(whole / 3600);
-  const minutes = Math.floor((whole % 3600) / 60);
-  return `${hours}h ${String(minutes).padStart(2, '0')}m`;
-}
-
 /**
  * How long until a sale opens, or nothing when it has.
  *

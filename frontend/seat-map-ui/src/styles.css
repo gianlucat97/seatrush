@@ -21,6 +21,7 @@
   --held: #d8a63c;
   --sold: #8e2f3f;
   --own: #5aa9ff;
+  --picked: #e8e9ed;
 
   --radius: 8px;
   font-family:
@@ -420,6 +421,134 @@ button.link {
   margin: 0;
 }
 
+/* The purchase, under the waiting room */
+
+.checkout {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-top-width: 3px;
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.checkout h2 {
+  font-size: 1.05rem;
+  margin: 0;
+}
+
+.checkout h3 {
+  font-size: 0.95rem;
+  margin: 0.5rem 0 0;
+}
+
+.checkout .lead {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+/* The three borders say the same thing the headings do: held, final, and over. */
+.checkout-held {
+  border-top-color: var(--held);
+}
+
+.checkout-secured,
+.checkout-confirmed {
+  border-top-color: var(--available);
+}
+
+.checkout-expired,
+.checkout-undoing,
+.checkout-failed {
+  border-top-color: var(--sold);
+}
+
+.seat-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.seat-list li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  border-bottom: 1px solid var(--line);
+  padding: 0.15rem 0;
+}
+
+.seat-name {
+  font-variant-numeric: tabular-nums;
+}
+
+.seat-price {
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  margin: 0.25rem 0 0;
+}
+
+.total-label {
+  color: var(--ink-dim);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.total-value {
+  font-size: 1.2rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.tickets {
+  width: 100%;
+}
+
+.ticket {
+  margin: 0.5rem 0 0;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.6rem;
+}
+
+.ticket figcaption {
+  font-weight: 600;
+}
+
+.ticket-id {
+  color: var(--ink-dim);
+  font-weight: 400;
+  font-size: 0.8rem;
+}
+
+/*
+ * The signed payload, which is the ticket itself. Shown whole rather than elided: it is what a gate
+ * verifies, and a demo that hid it would be hiding the one artefact the signing exists to produce.
+ */
+.ticket-payload {
+  display: block;
+  margin-top: 0.35rem;
+  overflow-wrap: anywhere;
+  font-size: 0.7rem;
+  line-height: 1.35;
+  color: var(--ink-dim);
+}
+
 /* The venue */
 
 .map-frame {
@@ -460,6 +589,27 @@ button.link {
   stroke: var(--own);
 }
 
+/*
+ * A seat this user has picked and not yet held. Outlined too, and in a colour of its own, because
+ * nothing about the sale has changed: the seat is still available to everybody else, and recolouring
+ * it would be the page telling its own user the venue is fuller than it is.
+ */
+.seat-selected {
+  stroke: var(--picked);
+  stroke-width: 0.12;
+}
+
+/* A seat that can be taken invites a pointer; one that cannot is only there to be read. */
+.seat[role='checkbox'] {
+  cursor: pointer;
+}
+
+.seat[role='checkbox']:focus-visible {
+  outline: none;
+  stroke: var(--accent);
+  stroke-width: 0.16;
+}
+
 .spectator .event-header h1 {
   font-size: 1.1rem;
 }
@@ -482,6 +632,7 @@ button.link {
     --available: #2f7a4d;
     --held: #b5811f;
     --sold: #a3303f;
+    --picked: #1b1d23;
   }
 
   .error {
