@@ -8,23 +8,36 @@ holding them, paying, and the signed ticket at the end of it.
 
 ## Running it
 
+The whole system, this page included, comes up with one command from the repository root:
+
+```bash
+make up              # http://localhost:5173, served by the stack's nginx
+make seed            # an event to open
+```
+
+For working on the client, the dev server replaces that container on the same port:
+
 ```bash
 npm install
 npm run dev          # http://localhost:5173
 ```
 
-From the repository root, `make ui` does the same thing.
+From the repository root, `make ui` does the same thing. Only one of the two can hold the port, so
+stop the container first (`docker compose stop ui`) or stop the dev server.
 
-The page needs the gateway and, behind it, inventory-service and realtime-service. The dev server
-proxies everything under `/api` to `http://localhost:8080`, which `SEATRUSH_API_URL` overrides:
+The page needs the gateway and, behind it, inventory-service, queue-service, order-service and
+realtime-service, which is what `make up` starts. The dev server proxies everything under `/api` to
+`http://localhost:8080`, which `SEATRUSH_API_URL` overrides:
 
 ```bash
 SEATRUSH_API_URL=http://staging.example.test npm run dev
 ```
 
-The proxy is not a convenience. The gateway has no CORS configuration, because in the deployed
-stack the page and the API are served from one origin, and a dev server that fetched the gateway
-directly would be exercising a path production does not have.
+The proxy is not a convenience. The gateway has no CORS configuration, because the page and the API
+are served from one origin, and a dev server that fetched the gateway directly would be exercising a
+path the deployed stack does not have. That one origin is real and not a plan: in the stack the page
+is static files behind nginx with `/api` proxied to the gateway, in
+[`deploy/docker-compose/nginx.conf`](../../deploy/docker-compose/nginx.conf).
 
 ## The scripts
 

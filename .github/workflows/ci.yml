@@ -87,6 +87,26 @@ jobs:
         run: npm run build
         working-directory: frontend/seat-map-ui
 
+  images:
+    name: Images
+    needs: format
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Every image of the stack, which is what make up starts. The six service images
+      # share one build stage, so this compiles the reactor once; nothing is pushed, and
+      # the point is only that a Dockerfile still builds. A broken one would otherwise be
+      # found by the next person running make up.
+      - name: Build the images
+        run: |
+          docker compose             --file deploy/docker-compose/docker-compose.yml             --env-file .env.example             build
+
   verify:
     name: Build and test
     needs: format
