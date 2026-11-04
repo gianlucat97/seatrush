@@ -14,6 +14,7 @@ import com.seatrush.messaging.messages.AuthorizePayment;
 import com.seatrush.messaging.messages.CapturePayment;
 import com.seatrush.messaging.messages.SampleMessages;
 import com.seatrush.messaging.messages.VoidPayment;
+import com.seatrush.messaging.tracing.MessageTracing;
 import com.seatrush.testsupport.containers.KafkaSupport;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -246,7 +247,7 @@ class MessageConsumerIT {
 
     Listener(MessageCodec codec) {
       this.router =
-          MessageRouter.using(codec)
+          MessageRouter.using(codec, MessageTracing.none())
               .handle(AuthorizePayment.class, envelope -> handled.add(envelope.messageId()))
               .handle(CapturePayment.class, envelope -> handled.add(envelope.messageId()))
               .build();

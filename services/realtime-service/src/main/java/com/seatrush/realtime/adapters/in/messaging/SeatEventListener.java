@@ -7,6 +7,7 @@ import com.seatrush.messaging.messages.EventSoldOut;
 import com.seatrush.messaging.messages.SeatsHeld;
 import com.seatrush.messaging.messages.SeatsReleased;
 import com.seatrush.messaging.messages.SeatsSold;
+import com.seatrush.messaging.tracing.MessageTracing;
 import com.seatrush.realtime.application.SeatMapDeltas;
 import com.seatrush.realtime.domain.SeatMapChange;
 import com.seatrush.realtime.domain.SeatStatus;
@@ -53,9 +54,9 @@ public class SeatEventListener {
 
   private final MessageRouter router;
 
-  public SeatEventListener(SeatMapDeltas deltas, MessageCodec codec) {
+  public SeatEventListener(SeatMapDeltas deltas, MessageCodec codec, MessageTracing tracing) {
     this.router =
-        MessageRouter.using(codec)
+        MessageRouter.using(codec, tracing)
             .handle(
                 SeatsHeld.class,
                 envelope -> {

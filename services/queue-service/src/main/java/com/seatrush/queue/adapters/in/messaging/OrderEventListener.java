@@ -5,6 +5,7 @@ import com.seatrush.messaging.Topics;
 import com.seatrush.messaging.consumer.MessageRouter;
 import com.seatrush.messaging.messages.OrderConfirmed;
 import com.seatrush.messaging.messages.OrderFailed;
+import com.seatrush.messaging.tracing.MessageTracing;
 import com.seatrush.queue.application.QueueService;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
@@ -39,9 +40,9 @@ public class OrderEventListener {
 
   private final MessageRouter router;
 
-  public OrderEventListener(QueueService queue, MessageCodec codec) {
+  public OrderEventListener(QueueService queue, MessageCodec codec, MessageTracing tracing) {
     this.router =
-        MessageRouter.using(codec)
+        MessageRouter.using(codec, tracing)
             .handle(
                 OrderConfirmed.class,
                 envelope ->

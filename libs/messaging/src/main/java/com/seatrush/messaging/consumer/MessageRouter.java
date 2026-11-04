@@ -4,6 +4,7 @@ import com.seatrush.messaging.MessageCodec;
 import com.seatrush.messaging.MessageEnvelope;
 import com.seatrush.messaging.MessagingException;
 import com.seatrush.messaging.messages.Message;
+import com.seatrush.messaging.tracing.MessageTracing;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -27,24 +28,35 @@ import java.util.function.Consumer;
  * <p>Every failure of a route is a {@link MessagingException}: either the bytes are not a message
  * this build can read, or they are a type it does not handle. Both mean the DLQ rather than a
  * retry, which is why they share a family the error handler can classify in one line.
+ *
+ * <p>This is also where a trace is picked up again. Every listener in the system routes through
+ * here, so the continuation of README section 14.2 belongs here rather than in each one of them:
+ * the handler runs as a child of the span that produced the message, which is what makes a checkout
+ * one trace across five services. The tracing is a required argument for the same reason the
+ * handlers are: a router assembled without it would be a gap in a trace that nothing fails about.
  */
 public final class MessageRouter {
 
   private final MessageCodec codec;
+  private final MessageTracing tracing;
   private final Map<Class<? extends Message>, Consumer<MessageEnvelope<Message>>> handlers;
 
   private MessageRouter(
       MessageCodec codec,
+      MessageTracing tracing,
       Map<Class<? extends Message>, Consumer<MessageEnvelope<Message>>> handlers) {
     this.codec = codec;
+    this.tracing = tracing;
     // An ordered copy rather than Map.copyOf, so handledTypes() reads back in the order the
     // service declared its handlers: the registry is also documentation of what a listener covers.
     this.handlers = Collections.unmodifiableMap(new LinkedHashMap<>(handlers));
   }
 
   /** A router being assembled. */
-  public static Builder using(MessageCodec codec) {
-    return new Builder(Objects.requireNonNull(codec, "codec must not be null"));
+  public static Builder using(MessageCodec codec, MessageTracing tracing) {
+    return new Builder(
+        Objects.requireNonNull(codec, "codec must not be null"),
+        Objects.requireNonNull(tracing, "tracing must not be null"));
   }
 
   /**
@@ -59,14 +71,20 @@ public final class MessageRouter {
     route(codec.decode(json));
   }
 
-  /** The same, for a caller that has already decoded the envelope. */
+  /**
+   * The same, for a caller that has already decoded the envelope.
+   *
+   * <p>The unhandled type is refused before the span is opened. A message nobody handles is not
+   * work this service did, so giving it a span would put a failure in the trace of the flow that
+   * produced it and suggest the handler ran and threw.
+   */
   public void route(MessageEnvelope<Message> envelope) {
     Objects.requireNonNull(envelope, "envelope must not be null");
     Consumer<MessageEnvelope<Message>> handler = handlers.get(envelope.payload().getClass());
     if (handler == null) {
       throw new UnhandledMessageTypeException(envelope.type());
     }
-    handler.accept(envelope);
+    tracing.continueFrom(envelope, () -> handler.accept(envelope));
   }
 
   /** The types this router will act on, which is what a listener of a topic should cover. */
@@ -78,11 +96,13 @@ public final class MessageRouter {
   public static final class Builder {
 
     private final MessageCodec codec;
+    private final MessageTracing tracing;
     private final Map<Class<? extends Message>, Consumer<MessageEnvelope<Message>>> handlers =
         new LinkedHashMap<>();
 
-    private Builder(MessageCodec codec) {
+    private Builder(MessageCodec codec, MessageTracing tracing) {
       this.codec = codec;
+      this.tracing = tracing;
     }
 
     /**
@@ -113,7 +133,7 @@ public final class MessageRouter {
       if (handlers.isEmpty()) {
         throw new IllegalStateException("a router with no handlers would park every message");
       }
-      return new MessageRouter(codec, handlers);
+      return new MessageRouter(codec, tracing, handlers);
     }
   }
 }

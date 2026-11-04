@@ -77,3 +77,24 @@ management:
     health:
       probes:
         enabled: true
+  tracing:
+    sampling:
+      # No roots. The sampler is parent based, so zero does not mean "no traces": it means this
+      # service never starts one of its own and always continues one that arrives, over HTTP or
+      # in a message envelope. Every trace worth having is a request through the gateway, and
+      # the alternative is a flood: the relays tick ten times a second and the schedulers once,
+      # almost always finding nothing, and each tick would be a trace of its own with every
+      # Redis command it made hanging underneath it.
+      #
+      # Raise it on one service to look at its background work, which is the case this is a knob
+      # for. What those jobs do is otherwise in the metrics of README section 14.1.
+      probability: ${SEATRUSH_TRACING_BACKGROUND_SAMPLE_RATE:0.0}
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          # The collector of deploy/docker-compose, over the port it publishes to the host. A
+          # service started inside the stack network reaches it by name instead. There is no
+          # default: an endpoint left unset means no exporter at all, so a service would carry a
+          # trace through every hop and then drop it on the floor.
+          endpoint: ${SEATRUSH_OTLP_ENDPOINT:http://localhost:4318/v1/traces}

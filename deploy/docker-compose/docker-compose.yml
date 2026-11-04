@@ -151,11 +151,34 @@ services:
       retries: 6
     restart: unless-stopped
 
+  # Where a span goes to be read again (README section 14.2). A service pushes OTLP over the
+  # published port; Grafana queries it over the stack network.
+  tempo:
+    image: grafana/tempo:2.9.1
+    container_name: seatrush-tempo
+    command: ["-config.file=/etc/tempo/tempo.yml"]
+    ports:
+      # The OTLP receiver, which is what every service exports to.
+      - "${OTLP_PORT:-4318}:4318"
+      # The query API, which is also how a verification run reads a trace back by its id.
+      - "${TEMPO_PORT:-3200}:3200"
+    volumes:
+      - ../tempo/tempo.yml:/etc/tempo/tempo.yml:ro
+      - tempo-data:/var/tempo
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:3200/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
+
   grafana:
     image: grafana/grafana:13.2.4
     container_name: seatrush-grafana
     depends_on:
       prometheus:
+        condition: service_healthy
+      tempo:
         condition: service_healthy
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
@@ -189,6 +212,7 @@ volumes:
   kafka-data:
   prometheus-data:
   grafana-data:
+  tempo-data:
 
 networks:
   # A fixed name, so a service started outside this file can still join the stack.

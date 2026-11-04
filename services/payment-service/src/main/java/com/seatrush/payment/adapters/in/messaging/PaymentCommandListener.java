@@ -6,6 +6,7 @@ import com.seatrush.messaging.consumer.MessageRouter;
 import com.seatrush.messaging.messages.AuthorizePayment;
 import com.seatrush.messaging.messages.CapturePayment;
 import com.seatrush.messaging.messages.VoidPayment;
+import com.seatrush.messaging.tracing.MessageTracing;
 import com.seatrush.payment.application.PaymentService;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
@@ -31,9 +32,10 @@ public class PaymentCommandListener {
 
   private final MessageRouter router;
 
-  public PaymentCommandListener(PaymentService payments, MessageCodec codec) {
+  public PaymentCommandListener(
+      PaymentService payments, MessageCodec codec, MessageTracing tracing) {
     this.router =
-        MessageRouter.using(codec)
+        MessageRouter.using(codec, tracing)
             .handle(AuthorizePayment.class, payments::authorize)
             .handle(CapturePayment.class, payments::capture)
             .handle(VoidPayment.class, payments::voidPayment)

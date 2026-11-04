@@ -847,7 +847,13 @@ Kafka consumer lag is collected with a Kafka exporter.
 
 ### 14.2 Tracing
 
-OpenTelemetry (Micrometer Tracing bridge) with OTLP export. Trace context is propagated over HTTP and inside the Kafka message envelope (`traceparent`), so a full checkout SAGA appears as **one trace across all services**.
+OpenTelemetry (Micrometer Tracing bridge) with OTLP export to **Tempo**, which the local stack runs and Grafana queries as a provisioned datasource. Trace context travels over HTTP in the usual header and between services in the message envelope's `traceparent`, so a full checkout SAGA appears as **one trace across all services**: the gateway, order-service, the synchronous freeze into inventory, payment-service authorizing, inventory committing at the pivot, the capture, and the queue slot released at the end of it.
+
+**The envelope carries the trace, not the broker.** A message is written to the outbox inside the transaction that caused it and published by a relay later, on another thread and possibly from another pod ([§9.5](#95-transactional-outbox-postgres-and-redis)). The Kafka hop therefore belongs to the relay's scheduled tick and not to the request that made the message, so a trace stitched from broker headers would attach every consumer to whichever tick happened to carry its record. Instead the context is captured where the envelope is built, which is inside the span of the request a buyer is waiting on, and the consumer continues from it: `MessageFactory` captures, `MessageRouter` continues, and `MessageTracing` in `libs/messaging` is the port between the two. That is also why the Kafka client instrumentation is left off: it would describe the relay's tick, which is not the journey anybody is following.
+
+**A trace is born at the door and nowhere else.** The gateway samples roots at `SEATRUSH_TRACING_SAMPLE_RATE`; every other service samples none and only continues a context that arrives, over HTTP or in an envelope. The sampler is parent based, so this loses nothing a client asked for: every request reaches the system through the gateway ([§6.1](#61-gateway-servicesgateway)), and everything behind it is either an HTTP hop carrying a header or a message carrying an envelope. What it does lose is a trace per background tick, and that is the point: the two relays run ten times a second and the schedulers once, in five services, almost always finding nothing to do, and each tick would otherwise be a trace of its own with every Redis command it made hanging underneath it. Silencing the instrumentation name by name is the same fix played as whack-a-mole, because the noise simply reappears one level down as orphaned client spans. Background work is measured instead ([§14.1](#141-metrics)), and `SEATRUSH_TRACING_BACKGROUND_SAMPLE_RATE` raises the root rate of one service when its schedulers are the thing being looked at.
+
+Sampling head-on is a knob rather than a constant, because a flash on-sale is exactly the workload that cannot keep every trace, and the traces worth keeping in one are the slow and the failed ones.
 
 ### 14.3 Logging
 
@@ -1135,6 +1141,9 @@ Main properties (all overridable via environment variables):
 | `seatrush.stream-relay.claim-idle-after` | inventory | `30s` | Pending entries are claimed from a dead consumer after this |
 | `seatrush.realtime.batch-window` | realtime | `200ms` | Delta batching window |
 | `seatrush.sse.heartbeat-interval` | queue, realtime | `15s` | SSE keep-alive comment |
+| `management.tracing.sampling.probability` | gateway | `1.0` | Share of requests that start a trace, which is every trace in the system ([§14.2](#142-tracing)); `SEATRUSH_TRACING_SAMPLE_RATE` |
+| `management.tracing.sampling.probability` | the other five | `0.0` | Roots only, so a background tick starts no trace of its own; `SEATRUSH_TRACING_BACKGROUND_SAMPLE_RATE` |
+| `management.opentelemetry.tracing.export.otlp.endpoint` | all | `http://localhost:4318/v1/traces` | Where spans are exported; unset means no exporter at all; `SEATRUSH_OTLP_ENDPOINT` |
 | `seatrush.sse.timeout` | queue, realtime | `30m` | How long one SSE stream may stay open before the client is asked to reconnect |
 | `seatrush.payment.decline-rate` | payment | `0.05` | Simulated decline rate |
 | `seatrush.payment.latency-p50` | payment | `300ms` | Simulated latency median |
@@ -1167,6 +1176,7 @@ Local endpoints:
 | Gateway | http://localhost:8080 |
 | Grafana | http://localhost:3000 |
 | Prometheus | http://localhost:9090 |
+| Tempo (traces, through Grafana Explore or its own API) | http://localhost:3200 |
 
 ## 24. Deployment on Kubernetes
 
