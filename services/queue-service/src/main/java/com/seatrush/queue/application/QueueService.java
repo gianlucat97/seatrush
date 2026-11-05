@@ -7,6 +7,8 @@ import com.seatrush.queue.domain.QueuePlace;
 import com.seatrush.queue.domain.QueueRegistry;
 import com.seatrush.queue.domain.SaleEvent;
 import com.seatrush.security.tokens.AdmissionTokenSigner;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.util.Objects;
 import java.util.Optional;
@@ -44,6 +46,7 @@ public class QueueService {
   private final AdmissionTokenSigner tokens;
   private final AdmissionProperties admission;
   private final Clock clock;
+  private final Counter releasedSlots;
 
   public QueueService(
       SaleCalendar calendar,
@@ -51,13 +54,22 @@ public class QueueService {
       AdmissionRateEstimator rates,
       AdmissionTokenSigner tokens,
       AdmissionProperties admission,
-      Clock clock) {
+      Clock clock,
+      MeterRegistry meters) {
     this.calendar = calendar;
     this.registry = registry;
     this.rates = rates;
     this.tokens = tokens;
     this.admission = admission;
     this.clock = clock;
+    // Beside the expiries counted by AdmissionJob, under the same name: the two reasons a slot
+    // comes free are what say whether the purchase area is turning over because buyers finish or
+    // because they run out of time.
+    this.releasedSlots =
+        Counter.builder("seatrush.admission.slots.freed")
+            .description("Purchase area slots given back")
+            .tag("reason", "released")
+            .register(meters);
   }
 
   /**
@@ -167,6 +179,9 @@ public class QueueService {
 
     boolean released = registry.releaseSlot(eventId, userId);
     if (released) {
+      // Only an actual release, so a redelivered OrderConfirmed does not count a second slot that
+      // was never there: the counter is the room this path made, not the messages it saw.
+      releasedSlots.increment();
       log.debug("user {} left the purchase area of event {}", userId, eventId);
     }
     return released;

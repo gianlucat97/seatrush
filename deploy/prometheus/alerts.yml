@@ -1,9 +1,11 @@
 # Alert rules of README section 14.4.
 #
-# Only the rules whose metric is defined in section 14.1 are written here. The remaining
-# three of that section (a SAGA past its deadline for more than a minute, capture retries
-# exhausted, a DLQ that is not empty) need a metric no service exposes yet, and are listed
-# at the bottom so the gap is visible rather than guessed at with an invented metric name.
+# Five rules, one per line of that section, and every one of them reads a metric a service
+# actually publishes. They have one thing in common: each fires on something that should not
+# be possible rather than on something that is merely bad. The system already handles slow,
+# failed and duplicated work by itself (README section 16), so a threshold on latency or on
+# errors would mostly fire while nothing was wrong. What is left is the cases where the
+# automatic answer has already been tried and did not work.
 groups:
   - name: seatrush-invariants
     rules:
@@ -27,6 +29,10 @@ groups:
       # Both relays (Postgres outbox and Redis stream) publish continuously, so this gauge
       # sits near zero. A lag that stays above the 5s of section 14.4 means events are
       # written but not reaching Kafka, which stalls every consumer downstream of them.
+      #
+      # One rule for two outboxes, which is why both publish under this name: the table in
+      # Postgres and the stream in Redis are the same mechanism in two stores, and the store
+      # label says which one is behind.
       - alert: OutboxLagHigh
         expr: seatrush_outbox_lag_seconds > 5
         for: 1m
@@ -39,10 +45,65 @@ groups:
             {{ $labels.instance }} is {{ $value }}s old. Consumers are behind by at
             least that much: check the relay and the broker.
 
-# Waiting on a metric:
-#   - a SAGA RUNNING past its deadline for more than a minute, which needs a gauge of the
-#     SAGAs whose deadline has passed (order-service, M2);
-#   - capture retries exhausted after the pivot, which needs a counter of the orders that
-#     ran out of retries (order-service, M2);
-#   - a DLQ that is not empty, which needs the Kafka exporter of section 14.1 and a rule
-#     on the end offset of every <topic>.dlq (M5).
+      # A consumer that cannot handle a record retries it and then parks it on the topic's
+      # .dlq (section 10.3), where nothing reads it. So the depth of a dead letter topic is
+      # the count of messages this system gave up on, and the only threshold that makes
+      # sense for it is zero.
+      #
+      # Current minus oldest offset rather than the current offset alone: offsets never go
+      # back, so the current one would hold this alert open for ever after a single poison
+      # message. The difference is what the log still holds, which is "the DLQ is not empty"
+      # as section 14.4 words it, and it clears when retention finally drops the record.
+      - alert: DeadLetterTopicNotEmpty
+        expr: >-
+          sum by (topic) (
+            kafka_topic_partition_current_offset{topic=~".+\\.dlq"}
+            - kafka_topic_partition_oldest_offset{topic=~".+\\.dlq"}
+          ) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.topic }} is holding dead letters"
+          description: >-
+            {{ $labels.topic }} holds {{ $value }} record(s) that a consumer could not
+            handle after its retries. Nothing will read them: find out why they were
+            rejected before the retention of the topic drops them.
+
+  - name: seatrush-checkout
+    rules:
+      # A deadline that passes is compensated by the scheduler within one interval of it
+      # (section 9.7), so this gauge is zero on a healthy deployment even while payments are
+      # slow: a checkout waiting for an authorization is not overdue until its deadline is
+      # gone. Above zero for a minute therefore does not mean a slow provider. It means the
+      # scheduler is not running, is failing every pass, or is not getting through its batch.
+      #
+      # max and not sum: every pod counts the same shared table, so a sum would multiply the
+      # figure by the number of replicas.
+      - alert: CheckoutPastItsDeadline
+        expr: max(seatrush_saga_stuck{reason="overdue"}) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: A checkout has been past its deadline for a minute
+          description: >-
+            {{ $value }} checkout(s) are still RUNNING with a deadline that has passed.
+            The scheduler should have compensated them within one pass: check that it is
+            running and that its passes are not failing.
+
+      # The one failure in README section 16 with no automatic answer left. Past the pivot
+      # the seats are sold, so there is nothing to give back and the capture is retried with
+      # backoff; when the retries are exhausted the order stays SEATS_COMMITTED with its
+      # money untaken and nothing in this system will try again. It needs a person, which is
+      # the whole reason it is paged on.
+      - alert: CaptureRetriesExhausted
+        expr: max(seatrush_saga_stuck{reason="capture_abandoned"}) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: An order has its seats sold and its payment not captured
+          description: >-
+            {{ $value }} order(s) have used up every capture retry. The seats are sold and
+            the money is not taken, and no retry is left: capture them by hand or refund
+            the order.

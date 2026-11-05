@@ -7,6 +7,8 @@ import com.seatrush.order.domain.OrderRepository;
 import com.seatrush.order.domain.OrderStatus;
 import com.seatrush.order.domain.SagaInstance;
 import com.seatrush.order.domain.SagaRepository;
+import com.seatrush.order.domain.SagaStep;
+import com.seatrush.order.domain.StuckSagas;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -177,6 +179,23 @@ final class InMemoryOrders implements OrderRepository, SagaRepository {
   @Override
   public List<SagaInstance> findRetryDue(Instant now, int limit) {
     return sagas.values().stream().filter(saga -> saga.isRetryDue(now)).limit(limit).toList();
+  }
+
+  /**
+   * The same two predicates the SQL counts, and with no limit, which is the point of the query: a
+   * gauge that stopped at the scheduler's batch size would read healthy on the deployment that most
+   * needs its alert.
+   */
+  @Override
+  public StuckSagas countStuck(Instant now, int maxRetries) {
+    long overdue = sagas.values().stream().filter(saga -> saga.isOverdue(now)).count();
+    long capturesAbandoned =
+        sagas.values().stream()
+            .filter(saga -> saga.status().acceptsReplies())
+            .filter(saga -> saga.step() == SagaStep.AWAITING_CAPTURE)
+            .filter(saga -> saga.retries() >= maxRetries)
+            .count();
+    return new StuckSagas(overdue, capturesAbandoned);
   }
 
   /**

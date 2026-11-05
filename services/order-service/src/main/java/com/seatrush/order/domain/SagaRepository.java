@@ -36,4 +36,19 @@ public interface SagaRepository {
 
   /** The SAGAs with a capture attempt due, locked for this transaction the same way. */
   List<SagaInstance> findRetryDue(Instant now, int limit);
+
+  /**
+   * How many checkouts are stuck right now, for the gauges of README section 14.1.
+   *
+   * <p>Counts and not rows, and no lock of any kind: this is read to be published and never to be
+   * acted on, so it must not take anything away from the pass that is there to fix it.
+   *
+   * <p>Unbounded by a batch size, unlike the two queries above. A scheduler takes a limited batch
+   * because it has work to do per row; a gauge that stopped counting at 500 would report a healthy
+   * number for the deployment that most needs the alert.
+   *
+   * @param maxRetries the retry limit of {@code seatrush.checkout.capture-max-retries}, which is
+   *     what makes a capture abandoned rather than merely waiting
+   */
+  StuckSagas countStuck(Instant now, int maxRetries);
 }

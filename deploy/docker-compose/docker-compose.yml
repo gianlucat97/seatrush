@@ -134,6 +134,27 @@ services:
       - ./kafka/create-topics.sh:/opt/seatrush/create-topics.sh:ro
     restart: "no"
 
+  # Consumer lag and topic offsets, which is the half of README section 14.1 that no service can
+  # report about itself: a consumer knows how far it has read and not how far the log goes, and the
+  # difference between the two is the only measure of whether a pipeline is keeping up. It is also
+  # where the dead letter alert reads from, because nothing consumes a .dlq topic and its depth is
+  # a fact about the broker rather than about any service.
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.9.0
+    container_name: seatrush-kafka-exporter
+    depends_on:
+      kafka:
+        condition: service_healthy
+    command:
+      - --kafka.server=kafka:9092
+      # Everything, because every topic of section 10.1 has a companion .dlq and the point of
+      # watching them is that they are normally empty.
+      - --topic.filter=.*
+      - --group.filter=.*
+    # No port published. Prometheus is a container of this stack and reaches it by name; nothing
+    # on the host has a reason to read it.
+    restart: unless-stopped
+
   prometheus:
     image: prom/prometheus:v3.15.1
     container_name: seatrush-prometheus

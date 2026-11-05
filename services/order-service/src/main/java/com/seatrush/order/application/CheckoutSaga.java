@@ -267,7 +267,6 @@ public class CheckoutSaga {
               + "are sold and the money is not taken",
           saga.orderId(),
           saga.retries());
-      meters.counter("seatrush.saga.captures.abandoned").increment();
       // Left exactly as it is, deliberately. Clearing the attempt would hide it from the
       // scheduler and from anybody reading why an order never confirmed.
       return false;

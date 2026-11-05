@@ -5,6 +5,7 @@ import com.seatrush.queue.domain.AdmitRequest;
 import com.seatrush.queue.domain.JoinRequest;
 import com.seatrush.queue.domain.QueuePlace;
 import com.seatrush.queue.domain.QueueRegistry;
+import com.seatrush.queue.domain.WaitingRoomSize;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -187,6 +188,30 @@ public class RedisQueueRegistry implements QueueRegistry {
   }
 
   @Override
+  public WaitingRoomSize size(UUID eventId, Instant now) {
+    Objects.requireNonNull(eventId, "eventId must not be null");
+    Objects.requireNonNull(now, "now must not be null");
+
+    Long lobby = redis.opsForSet().size(QueueKeys.lobby(eventId));
+    Long queued = redis.opsForZSet().zCard(QueueKeys.queue(eventId));
+    // From one millisecond past now, which is the same comparison admit.lua makes when it frees
+    // slots: it deletes the range up to and including now, so an admission expiring exactly now is
+    // expired. The scores are whole epoch milliseconds, so an inclusive bound one higher is that
+    // comparison exactly. Counting the range rather than the whole set is what makes this
+    // independent of when the door last swept, so the gauge is the buyers who still hold a slot
+    // and not those plus up to an interval of residue.
+    Long active =
+        redis
+            .opsForZSet()
+            .count(
+                QueueKeys.active(eventId),
+                (double) now.toEpochMilli() + 1,
+                Double.POSITIVE_INFINITY);
+
+    return new WaitingRoomSize(orZero(lobby), orZero(queued), orZero(active));
+  }
+
+  @Override
   public int openLobby(UUID eventId, List<UUID> users) {
     Objects.requireNonNull(eventId, "eventId must not be null");
     Objects.requireNonNull(users, "users must not be null");
@@ -209,6 +234,11 @@ public class RedisQueueRegistry implements QueueRegistry {
 
     Long queued = redis.execute(scripts.openLobby(), keys, args);
     return queued == null ? 0 : queued.intValue();
+  }
+
+  /** A Redis count, which is null only when the connection answered nothing at all. */
+  private static long orZero(Long count) {
+    return count == null ? 0L : count;
   }
 
   /** The place one reply describes, which is nothing at all for a user who is not waiting. */

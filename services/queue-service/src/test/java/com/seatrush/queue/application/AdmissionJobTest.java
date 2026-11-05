@@ -11,6 +11,7 @@ import com.seatrush.queue.domain.SaleStatus;
 import com.seatrush.security.tokens.AdmissionTokenSigner;
 import com.seatrush.security.tokens.TokenSecrets;
 import com.seatrush.testsupport.time.MutableClock;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -27,6 +28,7 @@ class AdmissionJobTest {
   private static final Instant ON_SALE_AT = Instant.parse("2026-06-01T10:00:00Z");
   private static final Duration ADMISSION_TTL = Duration.ofMinutes(10);
 
+  private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
   private final MutableClock clock = MutableClock.atArbitraryInstant();
   private final StubCatalog catalog = new StubCatalog();
   private final SaleCalendar calendar = new SaleCalendar(catalog);
@@ -134,6 +136,25 @@ class AdmissionJobTest {
     assertThat(rates.perSecond(EVENT_ID)).as("ten more admissions one second later").hasValue(10);
   }
 
+  @Test
+  void countsEveryUserItLetsThroughAndEverySlotItFreed() {
+    onSale();
+    queueUp(50);
+    AdmissionJob job = jobAt(100, 5);
+    job.admitFrom(event());
+
+    clock.advanceBy(ADMISSION_TTL);
+    job.admitFrom(event());
+
+    assertThat(meters.get("seatrush.admissions").counter().count())
+        .as("five let in by each of the two passes")
+        .isEqualTo(10.0);
+    assertThat(
+            meters.get("seatrush.admission.slots.freed").tag("reason", "expired").counter().count())
+        .as("and the room for the second five was made by the first five running out")
+        .isEqualTo(5.0);
+  }
+
   private AdmissionJob jobAt(int ratePerSecond, int maxActiveUsers) {
     return new AdmissionJob(
         calendar,
@@ -141,7 +162,8 @@ class AdmissionJobTest {
         rates,
         new AdmissionProperties(ratePerSecond, maxActiveUsers, Duration.ofSeconds(1)),
         tokens,
-        clock);
+        clock,
+        meters);
   }
 
   private SaleEvent event() {

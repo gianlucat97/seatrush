@@ -56,9 +56,11 @@ management:
   endpoints:
     web:
       exposure:
-        # Health for the container probe, info for the build it is running. The Prometheus
-        # endpoint arrives with the observability module.
-        include: health,info
+        # Health for the container probe, info for the build it is running, prometheus for the
+        # scrape of deploy/prometheus (README section 14.1). Three and not the wildcard: the
+        # rest of the actuator reads configuration, beans and environment, and this port is
+        # open to everything inside the network by design (README section 13).
+        include: health,info,prometheus
   endpoint:
     health:
       probes:

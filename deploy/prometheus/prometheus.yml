@@ -22,6 +22,30 @@ scrape_configs:
     static_configs:
       - targets: ["localhost:9090"]
 
-  # Each service is added here by the milestone that introduces it, scraped over the
-  # stack network on /actuator/prometheus. A job is written only once its target exists:
-  # a permanently down target trains everyone to ignore the targets page.
+  # The six services of README section 6, by the names the stack network resolves and on the
+  # port each one serves. Nothing here is a published port: Prometheus is a container of this
+  # stack, so it reaches the five services that publish nothing exactly as they reach each
+  # other, which is also the arrangement README section 24 gives the cluster.
+  #
+  # One job and not six. The series already says which service produced it: every meter carries
+  # a service tag, set by libs/observability from spring.application.name, so a dashboard
+  # selects on the metric rather than on how it happened to be collected. Six jobs would put
+  # the same fact in a second place and let the two disagree.
+  - job_name: seatrush
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets:
+          - "inventory-service:8081"
+          - "order-service:8082"
+          - "payment-service:8083"
+          - "queue-service:8084"
+          - "realtime-service:8085"
+          - "gateway:8080"
+
+  # Consumer lag, which is the one number about Kafka that no service can report: a consumer
+  # knows the offset it has reached and not the offset the broker is at, and the gap between
+  # them is the question (README section 14.1). It is also where the DLQ alert of section 14.4
+  # reads from, since nothing consumes a dead letter topic and its depth is a broker fact.
+  - job_name: kafka
+    static_configs:
+      - targets: ["kafka-exporter:9308"]

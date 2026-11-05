@@ -10,9 +10,11 @@ import com.seatrush.queue.application.SaleCalendar;
 import com.seatrush.queue.application.WaitingPlace;
 import com.seatrush.queue.domain.AdmissionBatch;
 import com.seatrush.queue.domain.EventCatalog;
+import com.seatrush.queue.domain.QueueRegistry;
 import com.seatrush.queue.domain.QueueState;
 import com.seatrush.queue.domain.SaleEvent;
 import com.seatrush.queue.domain.SaleStatus;
+import com.seatrush.queue.domain.WaitingRoomSize;
 import com.seatrush.security.tokens.AdmissionToken;
 import com.seatrush.security.tokens.AdmissionTokenSigner;
 import com.seatrush.security.tokens.TokenException;
@@ -83,6 +85,7 @@ class QueueAdmissionIT {
   @Autowired private StubCatalog catalog;
   @Autowired private MutableClock clock;
   @Autowired private StringRedisTemplate redis;
+  @Autowired private QueueRegistry queues;
 
   private UUID eventId;
 
@@ -341,6 +344,49 @@ class QueueAdmissionIT {
 
     assertThat(admitted).doesNotHaveDuplicates().containsExactlyInAnyOrderElementsOf(waiting);
     assertThat(redis.opsForZSet().size(QueueKeys.queue(eventId))).isZero();
+  }
+
+  /**
+   * The counts behind the gauges of README section 14.1, read off the same keys the door writes.
+   * Worth asserting against a real Redis and not a double, because the question is whether they are
+   * counts of the right keys: a queue measured by the per-user sequence keys rather than by the
+   * sorted set would keep counting a buyer who is already through the door.
+   */
+  @Test
+  void measuresTheQueueApartFromThePurchaseArea() {
+    queueUp(30);
+
+    assertThat(size()).isEqualTo(new WaitingRoomSize(0, 30, 0));
+
+    door.admitFrom(event());
+
+    assertThat(size())
+        .as("ten of the thirty are through the door and no longer waiting")
+        .isEqualTo(new WaitingRoomSize(0, 20, 10));
+  }
+
+  /** The same comparison {@code admit.lua} makes: an admission expiring exactly now is expired. */
+  @Test
+  void stopsCountingASlotTheInstantItExpires() {
+    queueUp(10);
+    door.admitFrom(event());
+
+    clock.advanceBy(ADMISSION_TTL.minusMillis(1));
+    assertThat(size().activeUsers()).as("one millisecond of the slot is left").isEqualTo(10);
+
+    clock.advanceBy(Duration.ofMillis(1));
+    assertThat(size().activeUsers())
+        .as("and at the instant it expires it is not held by anybody")
+        .isZero();
+  }
+
+  @Test
+  void countsNothingForASaleNobodyEverWaitedFor() {
+    assertThat(size()).isEqualTo(WaitingRoomSize.EMPTY);
+  }
+
+  private WaitingRoomSize size() {
+    return queues.size(eventId, clock.instant());
   }
 
   private long slotScoreOf(UUID userId) {

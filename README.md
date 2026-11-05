@@ -823,27 +823,51 @@ All endpoints are served through the gateway under `/api`. Errors follow **RFC 9
 
 ### 14.1 Metrics
 
-Micrometer → Prometheus. Besides standard JVM, HTTP, Kafka client and Hikari metrics, each service exposes domain metrics:
+Micrometer to Prometheus, which scrapes `/actuator/prometheus` on every service over the stack network. Besides the standard JVM, HTTP, Kafka client and Hikari metrics, each service exposes the domain metrics below.
+
+Every meter carries a **`service` label**, set from `spring.application.name` by `libs/observability`. Prometheus already labels a series with the job and the instance it came from, and that is exactly why the tag exists: those two say how a metric was collected, not what produced it, and the same metric arrives under a Compose service name here and a pod name in Kubernetes. A dashboard that selected on them would be a dashboard for one deployment.
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `seatrush_queue_length` | gauge | Users waiting, per event |
-| `seatrush_queue_active_users` | gauge | Users currently admitted, per event |
-| `seatrush_admissions_total` | counter | Users admitted |
+| `seatrush_queue_length{event,state}` | gauge | Users waiting for a sale, by part of the waiting room (`lobby`, `queued`) |
+| `seatrush_queue_active_users{event}` | gauge | Buyers in the purchase area whose admission has not expired |
+| `seatrush_admissions_total` | counter | Users let through the door |
+| `seatrush_admission_slots_freed_total{reason}` | counter | Purchase area slots given back, by how (`released` by a finished checkout, `expired` by the clock) |
 | `seatrush_holds_total{result}` | counter | Hold attempts by result (`ok`, `conflict`, `limit`, `invalid`) |
 | `seatrush_hold_duration_seconds` | histogram | Latency of the hold operation |
+| `seatrush_holds_released_total{by}` | counter | Holds given back on purpose (`user`, `saga`) |
 | `seatrush_holds_expired_total` | counter | Holds released by the sweeper |
+| `seatrush_holds_frozen_total{result}` | counter | Freeze attempts at the start of a checkout, by result |
 | `seatrush_seats_sold_total` | counter | Seats sold |
 | `seatrush_oversell_prevented_total` | counter | Sales rejected by the Postgres guard (must be 0) |
 | `seatrush_redis_reconciliations_total` | counter | Seats fixed in Redis by the reconciler |
+| `seatrush_seat_events_relayed_total` | counter | Seat events moved from the Redis stream to Kafka |
+| `seatrush_checkout_started_total{result}` | counter | Checkout attempts, including the ones refused before a SAGA existed |
 | `seatrush_saga_duration_seconds{outcome}` | histogram | End-to-end checkout duration |
 | `seatrush_saga_compensations_total{reason}` | counter | Compensations by reason |
 | `seatrush_saga_late_replies_total{type}` | counter | Replies received for terminated SAGAs |
+| `seatrush_saga_stuck{reason}` | gauge | Checkouts the scheduler cannot move on its own: past their deadline (`overdue`) or out of capture retries (`capture_abandoned`) |
+| `seatrush_payment_operations_total{operation,result}` | counter | Authorizations, captures and voids as the provider answered them |
+| `seatrush_payment_replays_total{operation}` | counter | Payment commands answered from the stored result of a previous one |
 | `seatrush_outbox_lag_seconds{store}` | gauge | Age of the oldest unpublished outbox entry (`postgres`, `redis`) |
+| `seatrush_outbox_relayed_total` | counter | Outbox entries published |
+| `seatrush_messages_duplicates_total{type}` | counter | Redelivered messages skipped by `processed_message` |
 | `seatrush_sse_connections{stream}` | gauge | Open SSE connections per pod (`queue`, `seatmap`) |
 | `seatrush_realtime_propagation_seconds` | histogram | Time from seat change (`occurredAt`) to delta sent |
 
-Kafka consumer lag is collected with a Kafka exporter.
+**Four of the five gauges describe shared state and have to be aggregated with a `max`, never a `sum`**: `seatrush_queue_length`, `seatrush_queue_active_users`, `seatrush_saga_stuck` and `seatrush_outbox_lag_seconds`. The state lives in Redis or in Postgres, not in the pod, so every replica publishes its own reading of the same number and a sum would multiply it by the replica count. `seatrush_sse_connections` is the one exception and the only metric here that must be summed: it counts the connections a single pod is holding, and the figure anybody wants is the total across them.
+
+**A gauge is sampled by the job that already knows the answer, never by the scrape.** The waiting room sizes are read by a scheduled sample in queue-service, the outbox lag by the relay pass that just claimed the rows, the stuck checkouts by the scheduler pass that just tried to move them. The alternative is for the gauge function itself to call Redis or Postgres, which would put a blocking round trip inside the response to a scrape: a store that stalled would then take the metrics endpoint down with it, at the one moment anybody is reading it. It also means a failed sample keeps the previous reading, which is the right answer for all three, since a waiting room that could not be measured has not emptied.
+
+**The timers publish histogram buckets, and that is a server-side decision.** A Micrometer timer exports a count, a sum and a maximum by default, and none of those is a percentile; the p99 targets of [§15](#15-non-functional-requirements) are `histogram_quantile` over bucket counters, so the buckets have to be in the exported metric. `libs/observability` configures them for `seatrush_hold_duration_seconds`, `seatrush_saga_duration_seconds`, `seatrush_realtime_propagation_seconds` and Boot's own `http_server_requests_seconds`, each with a bounded range and with an exact bucket edge on its target from §15. The range is what keeps a histogram to around sixty buckets rather than the hundred-odd an unbounded timer generates, most of them for durations the operation cannot have.
+
+The per-endpoint targets of §15 are read on the service that serves the endpoint and not on the gateway, because Spring Cloud Gateway tags its own server timer with `uri="UNKNOWN"` for a proxied route: the path it forwarded is not a route pattern it knows. So a join is `queue-service` with `uri="/api/events/{eventId}/queue"` and a hold is `inventory-service` with `uri="/api/events/{eventId}/holds"`, which is also the more useful of the two readings, since it is the one that excludes the proxy hop.
+
+**Nothing measures the monitoring.** Prometheus scrapes `/actuator/prometheus` every ten seconds and the container probe asks `/actuator/health/readiness` every five, and observed like any other request those add a row of `http_server_requests_seconds` per service that measures nothing but the monitoring itself. On the gateway it is worse than noise: it is the one service that starts traces, so every scrape would be a trace of its own, thousands a day of Prometheus reading a page. `libs/observability` leaves actuator paths out with an `ObservationPredicate`, which is the same argument sampling makes one level up ([§14.2](#142-tracing)): a trace is worth having when somebody is waiting for the request, and the only thing waiting for a scrape is the scrape.
+
+This system also pushes no metrics anywhere. `spring-boot-starter-opentelemetry` brings a Micrometer OTLP **metrics** registry along with the tracing it is there for, and that registry exports on its own as soon as it is on the classpath: before it was excluded in the parent POM it pushed to a `localhost` receiver that does not exist, once a minute, in six services, and warned every time. Traces are pushed and metrics are scraped, and the artifact that disagreed is gone rather than switched off by a property somebody has to remember.
+
+Kafka consumer lag is collected with a **Kafka exporter**, because it is the one number no service can report about itself: a consumer knows the offset it has reached and not the offset the log is at, and the gap between them is the question. It is also where the dead letter alert of [§14.4](#144-dashboards-and-alerts) reads from, since nothing consumes a `.dlq` topic and its depth is a fact about the broker.
 
 ### 14.2 Tracing
 
@@ -851,7 +875,7 @@ OpenTelemetry (Micrometer Tracing bridge) with OTLP export to **Tempo**, which t
 
 **The envelope carries the trace, not the broker.** A message is written to the outbox inside the transaction that caused it and published by a relay later, on another thread and possibly from another pod ([§9.5](#95-transactional-outbox-postgres-and-redis)). The Kafka hop therefore belongs to the relay's scheduled tick and not to the request that made the message, so a trace stitched from broker headers would attach every consumer to whichever tick happened to carry its record. Instead the context is captured where the envelope is built, which is inside the span of the request a buyer is waiting on, and the consumer continues from it: `MessageFactory` captures, `MessageRouter` continues, and `MessageTracing` in `libs/messaging` is the port between the two. That is also why the Kafka client instrumentation is left off: it would describe the relay's tick, which is not the journey anybody is following.
 
-**A trace is born at the door and nowhere else.** The gateway samples roots at `SEATRUSH_TRACING_SAMPLE_RATE`; every other service samples none and only continues a context that arrives, over HTTP or in an envelope. The sampler is parent based, so this loses nothing a client asked for: every request reaches the system through the gateway ([§6.1](#61-gateway-servicesgateway)), and everything behind it is either an HTTP hop carrying a header or a message carrying an envelope. What it does lose is a trace per background tick, and that is the point: the two relays run ten times a second and the schedulers once, in five services, almost always finding nothing to do, and each tick would otherwise be a trace of its own with every Redis command it made hanging underneath it. Silencing the instrumentation name by name is the same fix played as whack-a-mole, because the noise simply reappears one level down as orphaned client spans. Background work is measured instead ([§14.1](#141-metrics)), and `SEATRUSH_TRACING_BACKGROUND_SAMPLE_RATE` raises the root rate of one service when its schedulers are the thing being looked at.
+**A trace is born at the door and nowhere else**, and not even there for a request the monitoring made ([§14.1](#141-metrics)). The gateway samples roots at `SEATRUSH_TRACING_SAMPLE_RATE`; every other service samples none and only continues a context that arrives, over HTTP or in an envelope. The sampler is parent based, so this loses nothing a client asked for: every request reaches the system through the gateway ([§6.1](#61-gateway-servicesgateway)), and everything behind it is either an HTTP hop carrying a header or a message carrying an envelope. What it does lose is a trace per background tick, and that is the point: the two relays run ten times a second and the schedulers once, in five services, almost always finding nothing to do, and each tick would otherwise be a trace of its own with every Redis command it made hanging underneath it. Silencing the instrumentation name by name is the same fix played as whack-a-mole, because the noise simply reappears one level down as orphaned client spans. Background work is measured instead ([§14.1](#141-metrics)), and `SEATRUSH_TRACING_BACKGROUND_SAMPLE_RATE` raises the root rate of one service when its schedulers are the thing being looked at.
 
 Sampling head-on is a knob rather than a constant, because a flash on-sale is exactly the workload that cannot keep every trace, and the traces worth keeping in one are the slow and the failed ones.
 
@@ -867,7 +891,17 @@ Grafana dashboards are **provisioned as code** in `deploy/grafana/dashboards`:
 - **Checkout SAGA**: throughput, duration percentiles, compensations by reason, late replies, stuck SAGAs.
 - **Platform health**: latency, error rates, Kafka lag, outbox lag, SSE connections, Redis and Postgres saturation.
 
-Prometheus alert rules: `oversell_prevented > 0`, outbox lag > 5 s, SAGA past deadline for > 1 min, capture retries exhausted, DLQ not empty.
+Prometheus alert rules live in `deploy/prometheus/alerts.yml`. There are five, and what they have in common is that each one fires on something that should not be possible rather than on something that is merely bad: this system already answers slow, failed and duplicated work by itself ([§16](#16-failure-modes)), so a threshold on latency or on error rate would mostly fire while nothing was wrong. What is left is the cases where the automatic answer has already been tried and did not work.
+
+| Alert | Expression | Why it is an alert |
+|-------|-----------|--------------------|
+| `OversellPrevented` | `increase(seatrush_oversell_prevented_total[5m]) > 0` | Two orders reached the commit for the same seat, so the Redis state they were validated against was wrong. Nothing was oversold, and the hold path has a bug. |
+| `OutboxLagHigh` | `seatrush_outbox_lag_seconds > 5` for 1 min | Messages are written and not reaching Kafka, which stalls every consumer behind them. One rule for both outboxes, which is why the Postgres table and the Redis stream publish under one metric name. |
+| `DeadLetterTopicNotEmpty` | `current - oldest offset` of any `*.dlq` `> 0` for 1 min | A record this system gave up on, and nothing reads a dead letter topic. The difference of the two offsets and not the current one alone, because offsets never go back: the absolute figure would hold the alert open for ever after one poison message. |
+| `CheckoutPastItsDeadline` | `max(seatrush_saga_stuck{reason="overdue"}) > 0` for 1 min | A deadline is compensated within one scheduler pass, so this is zero even while payments are slow. Above zero for a minute means the scheduler is not running, is failing every pass, or is not getting through its batch. |
+| `CaptureRetriesExhausted` | `max(seatrush_saga_stuck{reason="capture_abandoned"}) > 0` | The one failure of [§16](#16-failure-modes) with no automatic answer left: the seats are sold, the money is not taken, and no retry remains. It needs a person. |
+
+There is no Alertmanager in the local stack. A firing rule is visible under **Alerts** in the Prometheus UI, which is what a demo of the rules needs; the receiver belongs to the Kubernetes deployment of [§24](#24-deployment-on-kubernetes).
 
 ## 15. Non-Functional Requirements
 
@@ -1187,6 +1221,8 @@ Then `make seed` creates an event through the public API and prints the two link
 | Grafana | http://localhost:3000 |
 | Prometheus | http://localhost:9090 |
 | Tempo (traces, through Grafana Explore or its own API) | http://localhost:3200 |
+
+**What Prometheus is scraping.** The six services, by the names the stack network resolves, plus a Kafka exporter that publishes nothing to the host. The target list is in `deploy/prometheus/prometheus.yml` and its state is at http://localhost:9090/targets, which is the first page to open if a panel is empty: six `seatrush` targets and one `kafka` target should be up. The rules of [§14.4](#144-dashboards-and-alerts) are at http://localhost:9090/alerts, where a firing one is visible without an Alertmanager.
 
 **The client is served by nginx, not by Vite.** The bundle is static files and `/api` is proxied to the gateway, so the page and the API share an origin and the browser never makes a cross-origin request. That is why there is no CORS configuration anywhere in this repository, and `deploy/docker-compose/nginx.conf` is where that claim is kept true. `make ui` runs the dev server on the same port for working on the client, with the same proxy, so only one of the two is up at a time.
 
