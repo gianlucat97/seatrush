@@ -69,6 +69,24 @@ public interface QueueRegistry {
   List<UUID> lobby(UUID eventId);
 
   /**
+   * How many people are in each part of one waiting room (README section 14.1).
+   *
+   * <p>Three counts and not the members, because this is what the gauges are built from and the
+   * populations it measures are two hundred thousand strong during the minute anybody looks at
+   * them. Reading the lobby to find out how big it is would move the whole set over the wire once a
+   * second per pod.
+   *
+   * <p>Not one consistent read, unlike {@link #place}. The three numbers are a sample of a thing
+   * that is moving, nothing is decided from them, and a lobby counted a millisecond before the
+   * queue it drained into would show two figures that briefly overlap. That is cheaper than a
+   * script, and a gauge is a sample either way.
+   *
+   * @param now what counts as an expired admission, so that {@code activeUsers} is the buyers who
+   *     still hold their slot rather than whatever the door has not swept up yet
+   */
+  WaitingRoomSize size(UUID eventId, Instant now);
+
+  /**
    * Gives back the purchase area slot of one buyer.
    *
    * <p>Called when a checkout has reached a terminal state, which is the one moment somebody is

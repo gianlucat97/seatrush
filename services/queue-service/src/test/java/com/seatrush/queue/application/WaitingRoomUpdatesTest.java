@@ -9,6 +9,7 @@ import com.seatrush.queue.domain.SaleStatus;
 import com.seatrush.security.tokens.AdmissionTokenSigner;
 import com.seatrush.security.tokens.TokenSecrets;
 import com.seatrush.testsupport.time.MutableClock;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
@@ -31,6 +32,7 @@ class WaitingRoomUpdatesTest {
   private static final Instant ON_SALE_AT = Instant.parse("2026-06-01T10:00:00Z");
   private static final Duration ADMISSION_TTL = Duration.ofMinutes(10);
 
+  private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
   private final MutableClock clock = MutableClock.at(ON_SALE_AT);
   private final StubCatalog catalog = new StubCatalog();
   private final SaleCalendar calendar = new SaleCalendar(catalog);
@@ -41,7 +43,7 @@ class WaitingRoomUpdatesTest {
   private final AdmissionProperties admission =
       new AdmissionProperties(500, 5_000, Duration.ofSeconds(1));
   private final QueueService queue =
-      new QueueService(calendar, queues, rates, tokens, admission, clock);
+      new QueueService(calendar, queues, rates, tokens, admission, clock, meters);
   private final WaitingRoomUpdates updates = new WaitingRoomUpdates(queue);
 
   @Test

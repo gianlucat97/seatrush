@@ -68,6 +68,15 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-actuator</artifactId>
     </dependency>
+    <!-- The Prometheus registry and the shared meter configuration (README section 14.1).
+         Without it the domain meters of this service exist only inside its own process:
+         this is what puts them on /actuator/prometheus, with the histogram buckets the p99
+         panels read and the service tag that says which of the six they came from. -->
+    <dependency>
+      <groupId>com.seatrush</groupId>
+      <artifactId>seatrush-observability</artifactId>
+      <version>${project.version}</version>
+    </dependency>
     <!-- One trace across every service of a checkout (README section 14.2). The starter is the
          whole of it: the auto-configuration that builds a Tracer and a Propagator, the bridge
          that makes them OpenTelemetry, and the OTLP exporter that ships finished spans to the

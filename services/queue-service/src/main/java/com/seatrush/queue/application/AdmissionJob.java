@@ -6,6 +6,8 @@ import com.seatrush.queue.domain.AdmitRequest;
 import com.seatrush.queue.domain.QueueRegistry;
 import com.seatrush.queue.domain.SaleEvent;
 import com.seatrush.security.tokens.AdmissionTokenSigner;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -44,6 +46,8 @@ public class AdmissionJob {
   private final AdmissionProperties properties;
   private final Duration admissionTtl;
   private final Clock clock;
+  private final Counter admissions;
+  private final Counter expiredSlots;
 
   /**
    * @param tokens the admission signer, here only for the lifetime it is configured with. The slot
@@ -56,13 +60,27 @@ public class AdmissionJob {
       AdmissionRateEstimator rates,
       AdmissionProperties properties,
       AdmissionTokenSigner tokens,
-      Clock clock) {
+      Clock clock,
+      MeterRegistry meters) {
     this.calendar = calendar;
     this.registry = registry;
     this.rates = rates;
     this.properties = properties;
     this.admissionTtl = tokens.ttl();
     this.clock = clock;
+    this.admissions =
+        Counter.builder("seatrush.admissions")
+            .description("Users let through the door of a sale")
+            .register(meters);
+    // The other half of how the purchase area makes room, beside the slots given back by a
+    // checkout that ended (QueueService.releaseSlot). An on-sale in which most of the room comes
+    // from expiries is one where buyers are arriving faster than they are finishing, and the two
+    // reasons under one name are what lets a dashboard show that ratio.
+    this.expiredSlots =
+        Counter.builder("seatrush.admission.slots.freed")
+            .description("Purchase area slots given back")
+            .tag("reason", "expired")
+            .register(meters);
   }
 
   /**
@@ -108,6 +126,8 @@ public class AdmissionJob {
                 properties.maxActiveUsers()));
 
     rates.observe(event.id(), now, batch.head());
+    admissions.increment(batch.size());
+    expiredSlots.increment(batch.freedSlots());
 
     if (!batch.isEmpty() || batch.freedSlots() > 0) {
       log.info(

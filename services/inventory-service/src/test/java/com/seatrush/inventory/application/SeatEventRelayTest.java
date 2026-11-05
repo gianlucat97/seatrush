@@ -10,6 +10,7 @@ import com.seatrush.inventory.domain.SeatEventPublisher;
 import com.seatrush.inventory.domain.SeatEventRecord;
 import com.seatrush.inventory.domain.SeatEventStream;
 import com.seatrush.inventory.domain.Section;
+import com.seatrush.testsupport.time.MutableClock;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.time.Instant;
@@ -34,13 +35,16 @@ class SeatEventRelayTest {
   private final InMemoryCatalog catalog = new InMemoryCatalog();
   private final RecordingStream stream = new RecordingStream();
   private final RecordingPublisher publisher = new RecordingPublisher();
+  private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
+  private final MutableClock clock = MutableClock.at(HAPPENED_AT);
   private final SeatEventRelay relay =
       new SeatEventRelay(
           catalog,
           stream,
           publisher,
           new StreamRelayProperties(Duration.ofMillis(100), 10, Duration.ofSeconds(30)),
-          new SimpleMeterRegistry());
+          meters,
+          clock);
 
   @Test
   void relaysWhatTheStreamOfAnOpenSaleHolds() {
@@ -113,7 +117,94 @@ class SeatEventRelayTest {
     assertThat(stream.acknowledged(eventId)).isEmpty();
   }
 
+  @Test
+  void publishesTheAgeOfTheOldestEntryItFound() {
+    UUID eventId = anOpenSale();
+    stream.hasEntries(
+        eventId,
+        entry("1-0", "SeatsHeld", 1L, HAPPENED_AT.minusSeconds(5)),
+        entry("2-0", "SeatsHeld", 2L, HAPPENED_AT.minusSeconds(1)));
+
+    relay.relayOnce();
+
+    // The oldest of the batch and not the newest: the question the lag answers is how long the
+    // change that has been waiting longest has waited.
+    assertThat(lagSeconds()).isEqualTo(5.0);
+  }
+
+  @Test
+  void reportsTheOldestEntryAcrossEverySale() {
+    UUID first = anOpenSale();
+    UUID second = anOpenSale();
+    stream.hasEntries(first, entry("1-0", "SeatsHeld", 1L, HAPPENED_AT.minusSeconds(2)));
+    stream.hasEntries(second, entry("1-0", "SeatsHeld", 1L, HAPPENED_AT.minusSeconds(9)));
+
+    relay.relayOnce();
+
+    assertThat(lagSeconds()).isEqualTo(9.0);
+  }
+
+  @Test
+  void dropsTheLagToZeroOnceTheBacklogIsGone() {
+    UUID eventId = anOpenSale();
+    stream.hasEntries(eventId, entry("1-0", "SeatsHeld", 1L, HAPPENED_AT.minusSeconds(5)));
+    relay.relayOnce();
+
+    assertThat(relay.relayOnce()).isZero();
+    assertThat(lagSeconds())
+        .as("a pass that found every stream empty is the one thing that clears the lag")
+        .isZero();
+  }
+
+  @Test
+  void keepsReportingTheLagOfWhatItCouldNotPublish() {
+    UUID eventId = anOpenSale();
+    stream.hasEntries(eventId, entry("1-0", "SeatsHeld", 1L, HAPPENED_AT.minusSeconds(5)));
+    publisher.alwaysThrows();
+
+    relay.relay();
+
+    // The pass threw, was swallowed by the schedule, and still reported the age of what it failed
+    // to send: a gauge that only moved on success would sit frozen at its last healthy value for
+    // the length of a broker outage, which is the one time anybody reads it.
+    assertThat(lagSeconds()).isEqualTo(5.0);
+  }
+
+  @Test
+  void leavesTheLastReadingAloneWhenAPassLearnedNothing() {
+    UUID eventId = anOpenSale();
+    stream.hasEntries(eventId, entry("1-0", "SeatsHeld", 1L, HAPPENED_AT.minusSeconds(5)));
+    publisher.alwaysThrows();
+    relay.relay();
+
+    stream.cannotBeRead();
+    relay.relay();
+
+    assertThat(lagSeconds())
+        .as("a catalog that could not be read is not a backlog that cleared")
+        .isEqualTo(5.0);
+  }
+
+  @Test
+  void publishesTheLagUnderTheSameNameAsThePostgresOutbox() {
+    anOpenSale();
+    relay.relayOnce();
+
+    // One metric, two stores, which is what lets the alert rule of README section 14.4 be one
+    // rule: the Postgres relay of libs/messaging publishes store="postgres" beside this.
+    assertThat(meters.get("seatrush.outbox.lag.seconds").tag("store", "redis").gauge()).isNotNull();
+  }
+
+  private double lagSeconds() {
+    return meters.get("seatrush.outbox.lag.seconds").tag("store", "redis").gauge().value();
+  }
+
   private static SeatEventRecord entry(String recordId, String type, long version) {
+    return entry(recordId, type, version, HAPPENED_AT);
+  }
+
+  private static SeatEventRecord entry(
+      String recordId, String type, long version, Instant occurredAt) {
     return new SeatEventRecord(
         recordId,
         UUID.fromString("0199c5f0-2222-7000-8000-00000000b002"),
@@ -121,7 +212,7 @@ class SeatEventRelayTest {
         List.of("A-1-1"),
         version,
         UUID.fromString("0199c5f0-4444-7000-8000-00000000d004"),
-        HAPPENED_AT);
+        occurredAt);
   }
 
   private UUID anOpenSale() {
@@ -146,9 +237,13 @@ class SeatEventRelayTest {
     private final Map<UUID, List<SeatEventRecord>> stale = new LinkedHashMap<>();
     private final Map<UUID, List<String>> acknowledged = new LinkedHashMap<>();
     private final Map<UUID, List<String>> delivered = new LinkedHashMap<>();
+    private boolean unreadable;
 
     @Override
     public List<SeatEventRecord> read(UUID eventId, int count) {
+      if (unreadable) {
+        throw new IllegalStateException("the stream cannot be read");
+      }
       List<SeatEventRecord> waiting = unread.getOrDefault(eventId, List.of());
       List<SeatEventRecord> taken =
           List.copyOf(waiting.subList(0, Math.min(count, waiting.size())));
@@ -182,6 +277,11 @@ class SeatEventRelayTest {
 
     void hasEntries(UUID eventId, SeatEventRecord... records) {
       unread.computeIfAbsent(eventId, id -> new ArrayList<>()).addAll(List.of(records));
+    }
+
+    /** A Redis that cannot be read at all, which is a pass that learns nothing. */
+    void cannotBeRead() {
+      unreadable = true;
     }
 
     void hasStaleEntries(UUID eventId, SeatEventRecord... records) {

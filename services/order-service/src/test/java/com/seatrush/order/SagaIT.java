@@ -33,11 +33,13 @@ import com.seatrush.order.domain.SagaInstance;
 import com.seatrush.order.domain.SagaRepository;
 import com.seatrush.order.domain.SagaStatus;
 import com.seatrush.order.domain.SagaStep;
+import com.seatrush.order.domain.StuckSagas;
 import com.seatrush.order.domain.Ticket;
 import com.seatrush.security.tickets.TicketSigner;
 import com.seatrush.testsupport.containers.KafkaSupport;
 import com.seatrush.testsupport.containers.PostgresSupport;
 import com.seatrush.testsupport.time.MutableClock;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -106,6 +108,7 @@ class SagaIT {
   @Autowired private MessageFactory messages;
   @Autowired private MutableClock clock;
   @Autowired private JdbcClient jdbc;
+  @Autowired private MeterRegistry meters;
 
   /**
    * The signer the application context built, which with nothing configured is a pair generated at
@@ -330,6 +333,62 @@ class SagaIT {
   }
 
   /**
+   * The count behind the two gauges of README section 14.1, against the database that answers it.
+   *
+   * <p>Worth an integration test and not a unit one, because the query is where the behaviour is: a
+   * {@code count(*) FILTER} over two predicates, on the same partial index the scheduler uses, and
+   * the thing it must not do is count a checkout that is no longer running.
+   */
+  @Test
+  void countsTheCheckoutsPastTheirDeadlineUntilTheyAreCompensated() {
+    assertThat(stuck()).isEqualTo(StuckSagas.NONE);
+
+    clock.advanceBy(TIMEOUT);
+    assertThat(stuck().overdue()).as("the deadline has passed and nothing has swept").isOne();
+
+    scheduler.sweepOnce();
+    awaitStatus(OrderStatus.COMPENSATING);
+
+    assertThat(stuck().overdue())
+        .as("a compensating checkout is not waiting for a deadline any more")
+        .isZero();
+  }
+
+  @Test
+  void countsACaptureThatHasUsedUpEveryRetry() {
+    reply(new PaymentAuthorized(orderId, UUID.randomUUID()));
+    awaitStatus(OrderStatus.PAYMENT_AUTHORIZED);
+    reply(new SeatsCommitted(orderId, EVENT_ID, seats()));
+    awaitStatus(OrderStatus.SEATS_COMMITTED);
+    assertThat(stuck().capturesAbandoned()).isZero();
+
+    for (int attempt = 0; attempt < 2; attempt++) {
+      clock.advanceBy(Duration.ofMinutes(5));
+      scheduler.sweepOnce();
+    }
+    clock.advanceBy(Duration.ofMinutes(5));
+    scheduler.sweepOnce();
+
+    assertThat(stuck().capturesAbandoned())
+        .as("the seats are sold, the money is not taken, and nothing will try again")
+        .isOne();
+    assertThat(gauge("capture_abandoned"))
+        .as("which is what the alert of README section 14.4 reads")
+        .isEqualTo(1.0);
+    assertThat(gauge("overdue"))
+        .as("and the deadline was dropped at the pivot, so nothing is overdue")
+        .isZero();
+  }
+
+  @Test
+  void publishesNothingStuckAfterAPassWithNothingToDo() {
+    scheduler.sweepOnce();
+
+    assertThat(gauge("overdue")).isZero();
+    assertThat(gauge("capture_abandoned")).isZero();
+  }
+
+  /**
    * The optimistic lock, as the database enforces it. Two states read at the same version, and only
    * one of them may be written.
    */
@@ -364,6 +423,15 @@ class SagaIT {
         .containsExactlyInAnyOrder(
             com.seatrush.order.domain.Compensation.VOID_PAYMENT,
             com.seatrush.order.domain.Compensation.RELEASE_HOLD);
+  }
+
+  private StuckSagas stuck() {
+    // The retry limit of the property source above, which is what makes a capture abandoned.
+    return sagas.countStuck(clock.instant(), 2);
+  }
+
+  private double gauge(String reason) {
+    return meters.get("seatrush.saga.stuck").tag("reason", reason).gauge().value();
   }
 
   private void reply(Message payload) {
@@ -416,8 +484,13 @@ class SagaIT {
       consumer.assign(partitions);
       consumer.seekToBeginning(partitions);
 
-      long deadline = System.nanoTime() + Duration.ofMillis(700).toNanos();
-      while (System.nanoTime() < deadline) {
+      // To the end of the log rather than for a fixed stretch of time. Every test of this class
+      // writes to the same topics, so the log only gets longer: a window that was long enough to
+      // reach the end of it early in the class would quietly stop being long enough later, and the
+      // test that noticed would be whichever one ran last.
+      Map<TopicPartition, Long> ends = consumer.endOffsets(partitions);
+      long deadline = System.nanoTime() + PATIENCE.toNanos();
+      while (!caughtUp(consumer, ends) && System.nanoTime() < deadline) {
         ConsumerRecords<String, String> batch = consumer.poll(Duration.ofMillis(100));
         batch.forEach(
             record -> {
@@ -428,6 +501,13 @@ class SagaIT {
       }
     }
     return found;
+  }
+
+  /** Whether every partition has been read up to the offset the log was at when we looked. */
+  private static boolean caughtUp(
+      KafkaConsumer<String, String> consumer, Map<TopicPartition, Long> ends) {
+    return ends.entrySet().stream()
+        .allMatch(end -> consumer.position(end.getKey()) >= end.getValue());
   }
 
   private static KafkaConsumer<String, String> consumer() {

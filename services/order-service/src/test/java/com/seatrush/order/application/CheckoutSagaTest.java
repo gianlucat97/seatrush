@@ -375,9 +375,17 @@ class CheckoutSagaTest {
     assertThat(saga().nextAttempt()).contains(clock.instant().plus(BACKOFF.multipliedBy(2)));
   }
 
-  /** Past the pivot there is nothing to compensate, so running out of attempts is an alert. */
+  /**
+   * Past the pivot there is nothing to compensate, so running out of attempts is an alert.
+   *
+   * <p>The alert reads {@code seatrush_saga_stuck{reason="capture_abandoned"}}, which is a gauge of
+   * the orders in this state and is published by the scheduler rather than from here. It has to be
+   * a gauge: this method is reached on every scheduler pass for as long as the order sits there,
+   * because the attempt stays armed on purpose so that nothing hides it, and a counter incremented
+   * here would have been a count of passes dressed up as a count of orders.
+   */
   @Test
-  void aCaptureThatNeverSucceedsIsAbandonedAndAlertedOn() {
+  void aCaptureThatNeverSucceedsIsAbandoned() {
     aCheckoutAwaitingCapture();
     for (int attempt = 0; attempt < properties.captureMaxRetries(); attempt++) {
       clock.advanceBy(Duration.ofMinutes(5));
@@ -392,7 +400,9 @@ class CheckoutSagaTest {
     assertThat(order().status())
         .as("the seats stay sold, which is the only honest state for it")
         .isEqualTo(OrderStatus.SEATS_COMMITTED);
-    assertThat(meters.counter("seatrush.saga.captures.abandoned").count()).isEqualTo(1.0);
+    assertThat(saga().retries())
+        .as("every attempt used, and the armed attempt left where the scheduler can still see it")
+        .isEqualTo(properties.captureMaxRetries());
   }
 
   @Test

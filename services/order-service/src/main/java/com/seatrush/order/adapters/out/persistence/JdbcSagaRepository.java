@@ -5,6 +5,7 @@ import com.seatrush.order.domain.SagaInstance;
 import com.seatrush.order.domain.SagaRepository;
 import com.seatrush.order.domain.SagaStatus;
 import com.seatrush.order.domain.SagaStep;
+import com.seatrush.order.domain.StuckSagas;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -92,6 +93,31 @@ public class JdbcSagaRepository implements SagaRepository {
       """
           .formatted(COLUMNS);
 
+  /**
+   * The two counts of {@link StuckSagas}, in one pass over the table.
+   *
+   * <p>One query and not two, because they are read together and published together, and because
+   * the partial index of README section 11.2 that covers the overdue predicate only helps the first
+   * half: a second statement would be a second scan of the live checkouts to answer a question
+   * about the same rows.
+   *
+   * <p>No {@code FOR UPDATE} and no {@code SKIP LOCKED}. A count taken while another pod holds a
+   * row has to include that row: it is stuck whether or not somebody is currently looking at it,
+   * and skipping it would make the gauge read lower precisely while a scheduler was busy.
+   */
+  private static final String COUNT_STUCK =
+      """
+      SELECT
+        count(*) FILTER (
+          WHERE deadline_at IS NOT NULL AND deadline_at <= :now
+        ) AS overdue,
+        count(*) FILTER (
+          WHERE step = 'AWAITING_CAPTURE' AND retries >= :maxRetries
+        ) AS captures_abandoned
+      FROM saga_instance
+      WHERE status = 'RUNNING'
+      """;
+
   private static final RowMapper<SagaInstance> MAPPER = JdbcSagaRepository::readSaga;
 
   private final JdbcClient jdbc;
@@ -145,6 +171,20 @@ public class JdbcSagaRepository implements SagaRepository {
   @Override
   public List<SagaInstance> findRetryDue(Instant now, int limit) {
     return due(SELECT_RETRY_DUE, now, limit);
+  }
+
+  @Override
+  public StuckSagas countStuck(Instant now, int maxRetries) {
+    if (maxRetries < 0) {
+      throw new IllegalArgumentException("maxRetries must not be negative, was " + maxRetries);
+    }
+    return jdbc.sql(COUNT_STUCK)
+        .param("now", at(now))
+        .param("maxRetries", maxRetries)
+        .query(
+            (ResultSet row, int number) ->
+                new StuckSagas(row.getLong("overdue"), row.getLong("captures_abandoned")))
+        .single();
   }
 
   private List<SagaInstance> due(String sql, Instant now, int limit) {

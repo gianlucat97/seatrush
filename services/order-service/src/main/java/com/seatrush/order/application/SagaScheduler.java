@@ -3,9 +3,13 @@ package com.seatrush.order.application;
 import com.seatrush.order.config.CheckoutProperties;
 import com.seatrush.order.domain.SagaInstance;
 import com.seatrush.order.domain.SagaRepository;
+import com.seatrush.order.domain.StuckSagas;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -36,17 +40,47 @@ public class SagaScheduler {
   private final Clock clock;
   private final CheckoutProperties properties;
 
+  /**
+   * What this pod last found still stuck, which is what the two alerts of README section 14.4 read.
+   *
+   * <p>Measured here because this is the thing that is supposed to clear both of them. A deadline
+   * that has passed is compensated within one interval and a capture is retried until its limit, so
+   * a number above zero taken straight after a pass is not a slow payment provider: it is work this
+   * scheduler did not manage to do.
+   *
+   * <p>Sampled on the scheduler's own interval rather than queried by the gauge, for the reason the
+   * outbox lag gauge gives: a scrape must not be able to block on the database.
+   *
+   * <p>Every pod publishes its own reading of one shared table, so these two have to be aggregated
+   * with a max or an average across instances and never with a sum.
+   */
+  private final AtomicLong overdue = new AtomicLong();
+
+  private final AtomicLong capturesAbandoned = new AtomicLong();
+
   public SagaScheduler(
       SagaRepository sagas,
       CheckoutSaga saga,
       TransactionTemplate transactions,
       Clock clock,
-      CheckoutProperties properties) {
+      CheckoutProperties properties,
+      MeterRegistry meters) {
     this.sagas = sagas;
     this.saga = saga;
     this.transactions = transactions;
     this.clock = clock;
     this.properties = properties;
+
+    // Weakly referenced by the registry, like every gauge here, so the subject is a field of a
+    // singleton bean and not a number this constructor hands over.
+    Gauge.builder("seatrush.saga.stuck", overdue, AtomicLong::get)
+        .tag("reason", "overdue")
+        .description("Checkouts the scheduler has not managed to move on")
+        .register(meters);
+    Gauge.builder("seatrush.saga.stuck", capturesAbandoned, AtomicLong::get)
+        .tag("reason", "capture_abandoned")
+        .description("Checkouts the scheduler has not managed to move on")
+        .register(meters);
   }
 
   /** One pass over the checkouts that have run out of time or are due another capture. */
@@ -69,7 +103,26 @@ public class SagaScheduler {
    * <p>Separate from the scheduled method so a test can run exactly one pass.
    */
   public int sweepOnce() {
-    return timeOutOverdue() + retryCaptures();
+    int moved = timeOutOverdue() + retryCaptures();
+    measureStuck();
+    return moved;
+  }
+
+  /**
+   * Reads what is still stuck after this pass.
+   *
+   * <p>A failure here keeps the previous reading and does not fail the pass: the sweep is the work
+   * and this is the report of it, so a count that could not be taken must not undo a compensation
+   * that was.
+   */
+  private void measureStuck() {
+    try {
+      StuckSagas stuck = sagas.countStuck(clock.instant(), properties.captureMaxRetries());
+      overdue.set(stuck.overdue());
+      capturesAbandoned.set(stuck.capturesAbandoned());
+    } catch (RuntimeException failure) {
+      log.warn("the stuck checkouts could not be counted and keep their last reading", failure);
+    }
   }
 
   /**

@@ -2,7 +2,7 @@
 #
 # The context is the repository root, because a service image is built from the parent POM
 # and libs/ as well as from its own module. Without this file that context is the build
-# outputs too: eleven target directories and a node_modules, several hundred megabytes sent
+# outputs too: twelve target directories and a node_modules, several hundred megabytes sent
 # to the daemon on every build, and a jar from the host leaking into an image that is
 # supposed to have built its own.
 

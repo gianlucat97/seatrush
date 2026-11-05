@@ -15,6 +15,7 @@ import com.seatrush.security.tokens.AdmissionToken;
 import com.seatrush.security.tokens.AdmissionTokenSigner;
 import com.seatrush.security.tokens.TokenSecrets;
 import com.seatrush.testsupport.time.MutableClock;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
@@ -29,6 +30,7 @@ class QueueServiceTest {
   private static final Instant ON_SALE_AT = Instant.parse("2026-06-01T10:00:00Z");
   private static final Duration ADMISSION_TTL = Duration.ofMinutes(10);
 
+  private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
   private final MutableClock clock = MutableClock.atArbitraryInstant();
   private final StubCatalog catalog = new StubCatalog();
   private final SaleCalendar calendar = new SaleCalendar(catalog);
@@ -39,7 +41,7 @@ class QueueServiceTest {
   private final AdmissionProperties admission =
       new AdmissionProperties(500, 5_000, Duration.ofSeconds(1));
   private final QueueService queue =
-      new QueueService(calendar, queues, rates, tokens, admission, clock);
+      new QueueService(calendar, queues, rates, tokens, admission, clock, meters);
 
   @Test
   void putsAnEarlyArrivalInTheLobby() {
@@ -291,6 +293,9 @@ class QueueServiceTest {
 
     assertThat(queue.releaseSlot(EVENT_ID, ADA)).isTrue();
     assertThat(queue.releaseSlot(EVENT_ID, ADA)).isFalse();
+    assertThat(releasedSlots())
+        .as("the counter is the room this path made, not the messages it saw")
+        .isEqualTo(1.0);
   }
 
   @Test
@@ -299,6 +304,10 @@ class QueueServiceTest {
     queue.join(EVENT_ID, ADA);
 
     assertThat(queue.releaseSlot(EVENT_ID, ADA)).isFalse();
+  }
+
+  private double releasedSlots() {
+    return meters.get("seatrush.admission.slots.freed").tag("reason", "released").counter().count();
   }
 
   private void open(SaleStatus status) {

@@ -5,6 +5,7 @@ import com.seatrush.queue.domain.AdmitRequest;
 import com.seatrush.queue.domain.JoinRequest;
 import com.seatrush.queue.domain.QueuePlace;
 import com.seatrush.queue.domain.QueueRegistry;
+import com.seatrush.queue.domain.WaitingRoomSize;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -130,6 +131,18 @@ class InMemoryQueues implements QueueRegistry {
   @Override
   public List<UUID> lobby(UUID eventId) {
     return List.copyOf(lobbyOf(eventId));
+  }
+
+  @Override
+  public WaitingRoomSize size(UUID eventId, Instant now) {
+    long head = headOf(eventId);
+    // Above the head, which is what the real queue sorted set holds: admitting pops the lowest
+    // sequences and moves the head to the highest it took, so a sequence at or below it belongs
+    // to somebody who is already through the door.
+    long queued =
+        sequencesOf(eventId).values().stream().filter(sequence -> sequence > head).count();
+    long active = slotsOf(eventId).values().stream().filter(expiry -> expiry.isAfter(now)).count();
+    return new WaitingRoomSize(lobbyOf(eventId).size(), queued, active);
   }
 
   @Override
