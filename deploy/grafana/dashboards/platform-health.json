@@ -1,0 +1,1625 @@
+{
+  "uid": "seatrush-platform",
+  "title": "SeatRush / Platform health",
+  "description": "The machinery under the two business dashboards: the API, the two outboxes, the broker, the streams, the two stores and the JVMs.\n\nThis is the dashboard to open when the other two look wrong and nothing in them explains why. Four of its panels have the thresholds of README sections 14.4 and 15 drawn on them as dashed lines, and those four are the ones an alert also watches.\n\nProvisioned from deploy/grafana/dashboards; edits in this UI are not saved back.",
+  "tags": [
+    "seatrush"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "links": [],
+  "panels": [
+    {
+      "type": "row",
+      "id": 1,
+      "title": "The API",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Scrape targets up",
+      "description": "The six services and the Kafka exporter. Anything below seven means a panel further down is missing data rather than reading zero.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "sum(up{job=~\"seatrush|kafka\"})",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "up"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 6
+              },
+              {
+                "color": "green",
+                "value": 7
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "orientation": "auto"
+      },
+      "id": 2,
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Requests per second by service",
+      "description": "Boot's own server timer, with the actuator left out of it: nothing here measures the scrape or the container probe (README section 14.1). The gateway counts each request once for the hop a client made and the service behind it counts it again for the hop the gateway made.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "sum by (service) (rate(http_server_requests_seconds_count[$__rate_interval]))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 3,
+      "gridPos": {
+        "h": 8,
+        "w": 10,
+        "x": 4,
+        "y": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Server error share by service",
+      "description": "5xx over all responses. A 4xx is deliberately not in here: a seat conflict, a refused hold and a missing admission token are the normal answers of a busy on-sale, and an error rate that counted them would be high exactly when the system was working.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "sum by (service) (rate(http_server_requests_seconds_count{status=~\"5..\"}[$__rate_interval]))\n  / sum by (service) (rate(http_server_requests_seconds_count[$__rate_interval]))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.01
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 4,
+      "gridPos": {
+        "h": 8,
+        "w": 10,
+        "x": 14,
+        "y": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "API p99 by service",
+      "description": "Per service rather than per endpoint, which is the altitude of this dashboard. The per-endpoint targets of README section 15 are read by selecting a uri on the service that serves it, and never on the gateway, whose own timer tags a proxied route uri=UNKNOWN.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le, service) (rate(http_server_requests_seconds_bucket[$__rate_interval])))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 5,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Error logs per second by service",
+      "description": "ERROR level log events, which is the cheapest signal that something is wrong in a path with no metric of its own. A relay pass that failed, a door that jammed and a poison message all show up here first.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "sum by (service) (rate(logback_events_total{level=\"error\"}[$__rate_interval]))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 6,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      }
+    },
+    {
+      "type": "row",
+      "id": 7,
+      "title": "The pipelines",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Outbox lag by store",
+      "description": "The age of the oldest message written and not yet published, for both outboxes of README section 9.5: the table in Postgres and the stream in Redis. Both publish under one metric name, which is what lets one alert rule cover them. The dashed line is the 5 s of section 14.4.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "max by (store) (seatrush_outbox_lag_seconds)",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{store}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 8,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 18
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Kafka consumer lag",
+      "description": "Records written to a topic and not yet read, from the Kafka exporter, because a consumer knows the offset it has reached and not the offset the log is at. The realtime groups are collapsed into one series: that service uses a group per pod on purpose, since every pod needs every seat event (README section 6.6).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "sum by (consumergroup, topic) (\n  label_replace(kafka_consumergroup_lag,\n    \"consumergroup\", \"realtime\", \"consumergroup\", \"realtime-.*\")\n)",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{consumergroup}} / {{topic}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 9,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 18
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Dead letters retained by topic",
+      "description": "What a dead letter topic still holds: the current offset less the oldest one, rather than the current offset alone, because offsets never go back. Nothing consumes these topics, so anything above zero is a message this system gave up on and a person has to look at.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "sum by (topic) (\n  kafka_topic_partition_current_offset{topic=~\".+\\\\.dlq\"}\n  - kafka_topic_partition_oldest_offset{topic=~\".+\\\\.dlq\"}\n)",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{topic}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 10,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 18
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Outbox throughput per second",
+      "description": "What the two relays are getting out. Both run on every pod with no coordination beyond SKIP LOCKED and the stream's consumer group, so this is summed across them.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "sum by (service) (rate(seatrush_outbox_relayed_total[$__rate_interval]))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "postgres / {{service}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "sum(rate(seatrush_seat_events_relayed_total[$__rate_interval]))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "redis / inventory-service"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 11,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 26
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Kafka listener time by service",
+      "description": "The slowest message a listener of each service handled recently. The max and not a percentile, because Spring's listener timer publishes no buckets: it is enough to see which consumer is the slow one and then go to its trace.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "max by (service) (spring_kafka_listener_seconds_max)",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 12,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 26
+      }
+    },
+    {
+      "type": "row",
+      "id": 13,
+      "title": "The streams",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 34
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "SSE connections by stream",
+      "description": "The one metric on this dashboard that is summed rather than maxed: it counts the connections a single pod is holding, so the total across pods is the figure that means something (README section 14.1).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "sum by (stream) (seatrush_sse_connections)",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{stream}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 30,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 14,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 35
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Seat map propagation percentiles",
+      "description": "From the instant a Lua script changed a seat to the instant a delta carrying it was written to a client: the relay tick, the Kafka hop and the batching window. The dashed line is the 500 ms of README section 15.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(seatrush_realtime_propagation_seconds_bucket[$__rate_interval])))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(seatrush_realtime_propagation_seconds_bucket[$__rate_interval])))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.5
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 15,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 35
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Scheduled work per second by job",
+      "description": "Every relay, sweeper, reconciler and sampler in the system, which is the work the traces of README section 14.2 deliberately do not describe: the gateway is the only service that starts a trace, so background ticks are measured here instead.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "sum by (service, code_function) (rate(tasks_scheduled_execution_seconds_count[$__rate_interval]))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{service}} {{code_function}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 16,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 35
+      }
+    },
+    {
+      "type": "row",
+      "id": 17,
+      "title": "The stores and the JVMs",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 43
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Postgres pool by service",
+      "description": "Hikari, for the three services that own a database. pending above zero is the one line to look at: it means a thread is waiting for a connection, which is the pool and not the database being the limit.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "hikaricp_connections_active",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{service}} active"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "hikaricp_connections_pending",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{service}} pending"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "hikaricp_connections_max",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{service}} max"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 18,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 44
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Redis command time by service",
+      "description": "Lettuce, which publishes a recent maximum and no buckets. The hold path is one EVALSHA per attempt, so this is effectively the ceiling of the hold latency on the other dashboard seen from the client side.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "max by (service) (lettuce_seconds_max)",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 19,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 44
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Redis commands per second",
+      "description": "Split by command, because the shape of this is the design of README section 9.2: the hold path is EVALSHA and nothing else, and a sudden rise in anything that is not a script is a round trip somebody added.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "sum by (db_operation) (rate(lettuce_seconds_count[$__rate_interval]))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{db_operation}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "sum(rate(lettuce_seconds_count{error!=\"none\"}[$__rate_interval]))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "errors"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 20,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 44
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "JVM heap by service",
+      "description": "Used heap per service. The images set a share of the container limit rather than a fixed heap, so the ceiling here follows whatever Compose or a Kubernetes limit gave the container.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "sum by (service) (jvm_memory_used_bytes{area=\"heap\"})",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 21,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 52
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "GC pause share by service",
+      "description": "Seconds of stop-the-world per second, which is the share of wall clock each service spends not serving anybody. The one JVM number worth a panel during an on-sale.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "sum by (service) (rate(jvm_gc_pause_seconds_sum[$__rate_interval]))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 22,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 52
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "CPU usage by service",
+      "description": "Process CPU as a share of the cores the container was given. Read beside the GC panel: a service at its limit and a service pausing for GC look the same from the outside and are fixed differently.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "process_cpu_usage",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 23,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 52
+      }
+    }
+  ]
+}

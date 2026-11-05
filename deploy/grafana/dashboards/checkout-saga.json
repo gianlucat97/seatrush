@@ -1,0 +1,1003 @@
+{
+  "uid": "seatrush-checkout",
+  "title": "SeatRush / Checkout SAGA",
+  "description": "The orchestrated checkout of README section 8.3, from the command that starts it to the ticket. Read it top down: how many checkouts there are, how long they take, and what happened to the ones that did not confirm.\n\nAlmost everything here is normally flat. Compensations, late replies and duplicates are the designed answers to failure (README section 16), so they are not faults in themselves; what matters is their shape against the throughput beside them. The one panel that must stay at zero is the stuck checkouts, because that is the only state in this system with no automatic answer left.\n\nProvisioned from deploy/grafana/dashboards; edits in this UI are not saved back.",
+  "tags": [
+    "seatrush"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "links": [],
+  "panels": [
+    {
+      "type": "row",
+      "id": 1,
+      "title": "Throughput",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Checkouts per second",
+      "description": "Every checkout that reached a terminal state, confirmed or not, counted where its duration is recorded.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "sum(rate(seatrush_saga_duration_seconds_count[$__rate_interval]))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "checkouts"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "orientation": "auto"
+      },
+      "id": 2,
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 0,
+        "y": 1
+      }
+    },
+    {
+      "type": "gauge",
+      "title": "Confirmed share",
+      "description": "Confirmed checkouts over all of them for the selected range. It sits a little under one minus the simulated decline rate of seatrush.payment.decline-rate, the difference being the seats lost to another buyer between the hold and the commit.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "sum(increase(seatrush_saga_duration_seconds_count{outcome=\"confirmed\"}[$__range]))\n  / sum(increase(seatrush_saga_duration_seconds_count[$__range]))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "confirmed"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.7
+              },
+              {
+                "color": "green",
+                "value": 0.9
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "id": 3,
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 5,
+        "y": 1
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Stuck checkouts",
+      "description": "Checkouts the scheduler cannot move on its own. overdue is a deadline that has passed and has not been compensated within a pass, which means the scheduler is not keeping up rather than that a payment is slow. capture_abandoned is the one failure with no automatic answer left: the seats are sold, the money is not taken, and it needs a person. Maxed and never summed, because every pod counts the same table.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "max by (reason) (seatrush_saga_stuck)",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{reason}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "orientation": "auto"
+      },
+      "id": 4,
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 10,
+        "y": 1
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Tickets per confirmed order",
+      "description": "Seats sold over confirmed checkouts, which is the average order size and the one cross-check between the two services on this dashboard.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "sum(increase(seatrush_seats_sold_total[$__range]))\n  / sum(increase(seatrush_saga_duration_seconds_count{outcome=\"confirmed\"}[$__range]))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "seats per order"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "orientation": "auto"
+      },
+      "id": 5,
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 16,
+        "y": 1
+      }
+    },
+    {
+      "type": "row",
+      "id": 6,
+      "title": "Duration",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Checkout duration percentiles",
+      "description": "End to end, from the command to the terminal state, across five services and a simulated payment whose own median is 300 ms. The dashed line is the p99 target of README section 15 and is an exact bucket edge in the exported metric.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(seatrush_saga_duration_seconds_bucket[$__rate_interval])))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(seatrush_saga_duration_seconds_bucket[$__rate_interval])))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(seatrush_saga_duration_seconds_bucket[$__rate_interval])))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 2
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 7,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 7
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Outcome per second",
+      "description": "A confirmed checkout has its tickets; a compensated one gave everything back. The ratio is the decline rate of the simulated provider plus the seats lost between the hold and the commit, and it is expected to be non-zero.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "sum by (outcome) (rate(seatrush_saga_duration_seconds_count[$__rate_interval]))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{outcome}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "sum by (result) (rate(seatrush_checkout_started_total[$__rate_interval]))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "started ({{result}})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 8,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 7
+      }
+    },
+    {
+      "type": "row",
+      "id": 9,
+      "title": "When it goes wrong",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Compensations per second by reason",
+      "description": "Which step gave up: a declined payment, seats taken by somebody else at the commit, or a deadline nobody answered. Each one is a full unwind of the steps before it, and each is a designed path rather than an error.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "sum by (reason) (rate(seatrush_saga_compensations_total[$__rate_interval]))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{reason}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 10,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 16
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Late replies per second by type",
+      "description": "A reply that arrived for a checkout that had already ended, which is what the at-least-once delivery of README section 8.3 guarantees will happen. An authorization landing late is voided again; anything else is recorded and dropped.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "sum by (type) (rate(seatrush_saga_late_replies_total[$__rate_interval]))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{type}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 11,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 16
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Duplicate messages per second by type",
+      "description": "Redeliveries recognised by the processed_message table and skipped. Their presence is the idempotent consumer working, not the broker misbehaving.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "sum by (type) (rate(seatrush_messages_duplicates_total[$__rate_interval]))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{type}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 12,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 16
+      }
+    },
+    {
+      "type": "row",
+      "id": 13,
+      "title": "The steps",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Freeze results per second",
+      "description": "The one synchronous hop a checkout has: the hold is frozen in inventory before the SAGA starts, so a hold that expired or belongs to somebody else is refused before any money is touched.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "sum by (result) (rate(seatrush_holds_frozen_total[$__rate_interval]))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 14,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 25
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Payment operations per second",
+      "description": "Authorizations, captures and voids as the simulated provider answered them. A capture that keeps failing is what eventually becomes an abandoned capture above.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "sum by (operation, result) (rate(seatrush_payment_operations_total[$__rate_interval]))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{operation}} {{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 15,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 25
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Payment replays per second",
+      "description": "A command answered from the stored result of an identical one rather than sent to the provider again. This is what makes a redelivered AuthorizePayment safe, and the number that would otherwise be a double charge.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "seatrush-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "seatrush-prometheus"
+          },
+          "expr": "sum by (operation) (rate(seatrush_payment_replays_total[$__rate_interval]))",
+          "range": true,
+          "editorMode": "code",
+          "legendFormat": "{{operation}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "pointSize": 5,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 16,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 25
+      }
+    }
+  ]
+}

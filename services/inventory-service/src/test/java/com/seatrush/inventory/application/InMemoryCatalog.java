@@ -40,6 +40,8 @@ final class InMemoryCatalog implements EventRepository, SeatRepository, SeatSale
   /** Set to true to make every status update lose its race, as a concurrent one would. */
   private boolean statusUpdatesLose;
 
+  private boolean listingByStatusFails;
+
   @Override
   public void insert(Event event, List<Section> newSections) {
     if (events.putIfAbsent(event.id(), event) != null) {
@@ -62,6 +64,9 @@ final class InMemoryCatalog implements EventRepository, SeatRepository, SeatSale
 
   @Override
   public List<Event> findByStatus(EventStatus status) {
+    if (listingByStatusFails) {
+      throw new IllegalStateException("the catalog cannot be listed");
+    }
     return findAll().stream().filter(event -> event.status() == status).toList();
   }
 
@@ -150,5 +155,10 @@ final class InMemoryCatalog implements EventRepository, SeatRepository, SeatSale
 
   void loseEveryStatusUpdate() {
     statusUpdatesLose = true;
+  }
+
+  /** A catalog that cannot be read, which is a sampling pass that learns nothing. */
+  void failsToListByStatus() {
+    listingByStatusFails = true;
   }
 }

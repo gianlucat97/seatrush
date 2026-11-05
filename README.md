@@ -839,6 +839,8 @@ Every meter carries a **`service` label**, set from `spring.application.name` by
 | `seatrush_holds_expired_total` | counter | Holds released by the sweeper |
 | `seatrush_holds_frozen_total{result}` | counter | Freeze attempts at the start of a checkout, by result |
 | `seatrush_seats_sold_total` | counter | Seats sold |
+| `seatrush_seats_available{event}` | gauge | Seats of a live sale that can still be taken, as the Redis counter has it |
+| `seatrush_seats_capacity{event}` | gauge | Seats the venue of a live sale has, read once per event |
 | `seatrush_oversell_prevented_total` | counter | Sales rejected by the Postgres guard (must be 0) |
 | `seatrush_redis_reconciliations_total` | counter | Seats fixed in Redis by the reconciler |
 | `seatrush_seat_events_relayed_total` | counter | Seat events moved from the Redis stream to Kafka |
@@ -855,9 +857,9 @@ Every meter carries a **`service` label**, set from `spring.application.name` by
 | `seatrush_sse_connections{stream}` | gauge | Open SSE connections per pod (`queue`, `seatmap`) |
 | `seatrush_realtime_propagation_seconds` | histogram | Time from seat change (`occurredAt`) to delta sent |
 
-**Four of the five gauges describe shared state and have to be aggregated with a `max`, never a `sum`**: `seatrush_queue_length`, `seatrush_queue_active_users`, `seatrush_saga_stuck` and `seatrush_outbox_lag_seconds`. The state lives in Redis or in Postgres, not in the pod, so every replica publishes its own reading of the same number and a sum would multiply it by the replica count. `seatrush_sse_connections` is the one exception and the only metric here that must be summed: it counts the connections a single pod is holding, and the figure anybody wants is the total across them.
+**Six of the seven gauges describe shared state and have to be aggregated with a `max`, never a `sum`**: `seatrush_queue_length`, `seatrush_queue_active_users`, `seatrush_saga_stuck`, `seatrush_outbox_lag_seconds`, `seatrush_seats_available` and `seatrush_seats_capacity`. The state lives in Redis or in Postgres, not in the pod, so every replica publishes its own reading of the same number and a sum would multiply it by the replica count. `seatrush_sse_connections` is the one exception and the only metric here that must be summed: it counts the connections a single pod is holding, and the figure anybody wants is the total across them.
 
-**A gauge is sampled by the job that already knows the answer, never by the scrape.** The waiting room sizes are read by a scheduled sample in queue-service, the outbox lag by the relay pass that just claimed the rows, the stuck checkouts by the scheduler pass that just tried to move them. The alternative is for the gauge function itself to call Redis or Postgres, which would put a blocking round trip inside the response to a scrape: a store that stalled would then take the metrics endpoint down with it, at the one moment anybody is reading it. It also means a failed sample keeps the previous reading, which is the right answer for all three, since a waiting room that could not be measured has not emptied.
+**A gauge is sampled by the job that already knows the answer, never by the scrape.** The waiting room sizes are read by a scheduled sample in queue-service, the seats left by one in inventory-service, the outbox lag by the relay pass that just claimed the rows, the stuck checkouts by the scheduler pass that just tried to move them. The alternative is for the gauge function itself to call Redis or Postgres, which would put a blocking round trip inside the response to a scrape: a store that stalled would then take the metrics endpoint down with it, at the one moment anybody is reading it. It also means a failed sample keeps the previous reading, which is the right answer for all three, since a waiting room that could not be measured has not emptied.
 
 **The timers publish histogram buckets, and that is a server-side decision.** A Micrometer timer exports a count, a sum and a maximum by default, and none of those is a percentile; the p99 targets of [§15](#15-non-functional-requirements) are `histogram_quantile` over bucket counters, so the buckets have to be in the exported metric. `libs/observability` configures them for `seatrush_hold_duration_seconds`, `seatrush_saga_duration_seconds`, `seatrush_realtime_propagation_seconds` and Boot's own `http_server_requests_seconds`, each with a bounded range and with an exact bucket edge on its target from §15. The range is what keeps a histogram to around sixty buckets rather than the hundred-odd an unbounded timer generates, most of them for durations the operation cannot have.
 
@@ -885,11 +887,21 @@ Structured JSON logs with `traceId`, `spanId`, `orderId`, `eventId`, `userId` in
 
 ### 14.4 Dashboards and alerts
 
-Grafana dashboards are **provisioned as code** in `deploy/grafana/dashboards`:
+Three Grafana dashboards are **provisioned as code** in `deploy/grafana/dashboards`, under a `SeatRush` folder a `make up` creates without a click. They are read from the repository and not editable in the UI: a change made in Grafana is not saved back, and one made here lands in a running Grafana within half a minute.
 
-- **On-sale overview**: queue length, admission rate, active users, holds/s, conflicts, seats sold over time, sold-out progress.
-- **Checkout SAGA**: throughput, duration percentiles, compensations by reason, late replies, stuck SAGAs.
-- **Platform health**: latency, error rates, Kafka lag, outbox lag, SSE connections, Redis and Postgres saturation.
+| Dashboard | What it answers | Panels |
+|-----------|-----------------|--------|
+| **On-sale overview** | How the sale is going, right now | Seats left and sold-out progress, the lobby and the queue apart, admissions and freed slots per second, hold attempts by result, holds given back by how, seats sold per second, hold latency against its 50 ms target, and the two invariant counters that are specified to stay at zero |
+| **Checkout SAGA** | What happens to a purchase after Pay | Throughput and confirmed share, duration percentiles against the 2 s target, stuck checkouts, compensations by reason, late replies by type, duplicate messages, freeze results, payment operations and replays |
+| **Platform health** | Why the other two look wrong | Request rate, 5xx share and p99 per service, error logs, the two outbox lags, Kafka consumer lag and dead letters retained, SSE connections, seat-map propagation against its 500 ms target, scheduled work, the Hikari pool, Lettuce command time and rate, heap, GC share and CPU |
+
+Three conventions run through all of them, and each is a decision the metrics make rather than the panels:
+
+- **A gauge over shared state is maxed, never summed** ([§14.1](#141-metrics)). Every replica publishes its own reading of the same Redis key or Postgres table, so a sum would multiply the figure by the replica count. `seatrush_sse_connections` is the single exception and is stacked and summed, because it counts what one pod is holding.
+- **A percentile comes from buckets the service publishes**, not from an average, which is why `libs/observability` configures them. The four panels with a dashed line on them read a target of [§15](#15-non-functional-requirements) off an exact bucket edge.
+- **A 4xx is not an error rate.** A seat conflict, a refused hold and a missing admission token are the ordinary answers of a busy on-sale, so the error panel counts 5xx only. An error rate that included the rest would be highest exactly when the system was working.
+
+The dashboards are validated in CI by `scripts/check-dashboards.py`: the JSON parses, the uids are unique, no two panels overlap on the grid, every query names the provisioned datasource, and every expression is handed to `promtool` as a rule so the PromQL is parsed rather than trusted. A dashboard fails quietly otherwise, because Grafana logs the provisioning error and serves the folder without it.
 
 Prometheus alert rules live in `deploy/prometheus/alerts.yml`. There are five, and what they have in common is that each one fires on something that should not be possible rather than on something that is merely bad: this system already answers slow, failed and duplicated work by itself ([§16](#16-failure-modes)), so a threshold on latency or on error rate would mostly fire while nothing was wrong. What is left is the cases where the automatic answer has already been tried and did not work.
 
@@ -1173,6 +1185,7 @@ Main properties (all overridable via environment variables):
 | `seatrush.consumer.retry-max-backoff` | all | `5s` | Ceiling the redelivery pause doubles up to |
 | `seatrush.tickets.private-key` | order | none | Base64 PKCS#8 Ed25519 key tickets are signed with; a throwaway pair is generated when unset |
 | `seatrush.tickets.public-key` | order | none | Base64 X.509 public half, which is what verifies a ticket |
+| `seatrush.sale-metrics.interval` | inventory | `5s` | How often the seats left of every live sale are read, for the sold-out progress of [§14.4](#144-dashboards-and-alerts) |
 | `seatrush.stream-relay.poll-interval` | inventory | `100ms` | Seat event relay period |
 | `seatrush.stream-relay.batch-size` | inventory | `500` | Stream entries per relay pass |
 | `seatrush.stream-relay.claim-idle-after` | inventory | `30s` | Pending entries are claimed from a dead consumer after this |
@@ -1218,9 +1231,11 @@ Then `make seed` creates an event through the public API and prints the two link
 |-----------|-----|
 | Seat map UI | http://localhost:5173 |
 | Gateway | http://localhost:8080 |
-| Grafana | http://localhost:3000 |
+| Grafana (the three dashboards of [§14.4](#144-dashboards-and-alerts), in the `SeatRush` folder) | http://localhost:3000 |
 | Prometheus | http://localhost:9090 |
 | Tempo (traces, through Grafana Explore or its own API) | http://localhost:3200 |
+
+**Grafana opens without a login and with the dashboards already there.** Anonymous access is read-only and the three dashboards of [§14.4](#144-dashboards-and-alerts) are provisioned from the repository, so there is nothing to import: `make seed`, then **On-sale overview**, and the venue fills in front of you. The admin credentials in `.env` are only needed to change something by hand, and a change made that way is not saved back.
 
 **What Prometheus is scraping.** The six services, by the names the stack network resolves, plus a Kafka exporter that publishes nothing to the host. The target list is in `deploy/prometheus/prometheus.yml` and its state is at http://localhost:9090/targets, which is the first page to open if a panel is empty: six `seatrush` targets and one `kafka` target should be up. The rules of [§14.4](#144-dashboards-and-alerts) are at http://localhost:9090/alerts, where a firing one is visible without an Alertmanager.
 

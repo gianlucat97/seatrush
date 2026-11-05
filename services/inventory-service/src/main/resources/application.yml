@@ -80,6 +80,12 @@ seatrush:
     # repeated here only so a deployment can override them by environment variable.
     poll-interval: ${SEATRUSH_OUTBOX_POLL_INTERVAL:100ms}
     batch-size: ${SEATRUSH_OUTBOX_BATCH_SIZE:500}
+  sale-metrics:
+    # How often the seats left of every live sale are read, for the two gauges the sold out
+    # progress of README section 14.4 is computed from. It only has to be finer than the scrape
+    # interval of section 14.1, since nothing reads a gauge faster than Prometheus does, and the
+    # whole pass is one Redis read per open sale.
+    interval: ${SEATRUSH_SALE_METRICS_INTERVAL:5s}
   stream-relay:
     # The seat map of every client is at most this far behind the seat state in Redis, so it is
     # tens of milliseconds. A blocking XREADGROUP is not used because the streams are per event

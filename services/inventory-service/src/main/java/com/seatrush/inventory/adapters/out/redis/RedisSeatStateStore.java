@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.data.redis.core.RedisOperations;
@@ -134,6 +135,14 @@ public class RedisSeatStateStore implements SeatStateStore {
         && Long.parseLong(available) == 0L
         && isEmpty(SeatKeys.holdExpiry(eventId))
         && isEmpty(SeatKeys.holdCheckout(eventId));
+  }
+
+  @Override
+  public OptionalInt availableSeats(UUID eventId) {
+    Objects.requireNonNull(eventId, "eventId must not be null");
+
+    String available = redis.opsForValue().get(SeatKeys.available(eventId));
+    return available == null ? OptionalInt.empty() : OptionalInt.of(Integer.parseInt(available));
   }
 
   @Override

@@ -2,6 +2,7 @@ package com.seatrush.inventory.domain;
 
 import java.util.Collection;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.UUID;
 
@@ -49,6 +50,19 @@ public interface SeatStateStore {
    * a wrong answer: a sale that is not sold out yet is simply looked at again.
    */
   boolean isSoldOut(UUID eventId);
+
+  /**
+   * How many seats of a sale can still be taken, as the counter holds it (README section 14.1).
+   *
+   * <p>The counter and not a count of the seat hash, which is tens of thousands of fields and is
+   * read on a schedule: this is the same read {@link #isSoldOut} makes, and it is the authority the
+   * sale is bounded by rather than a derivation of one.
+   *
+   * <p>Empty for a sale whose seat map was never warmed up, which is not the same answer as zero: a
+   * sale with no state has nothing left to sell in the sense that nothing can be sold, and a gauge
+   * reporting zero would read as sold out.
+   */
+  OptionalInt availableSeats(UUID eventId);
 
   /** Drops the seat state of an event, the way closing a sale or a test between runs does. */
   void clear(UUID eventId);
