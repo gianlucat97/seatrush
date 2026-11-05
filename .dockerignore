@@ -1,0 +1,35 @@
+# What never belongs in a build context (README section 23).
+#
+# The context is the repository root, because a service image is built from the parent POM
+# and libs/ as well as from its own module. Without this file that context is the build
+# outputs too: eleven target directories and a node_modules, several hundred megabytes sent
+# to the daemon on every build, and a jar from the host leaking into an image that is
+# supposed to have built its own.
+
+# Build outputs. The images build their own; one copied in from a developer's machine would
+# make an image that cannot be reproduced.
+target/
+**/target/
+**/node_modules/
+**/dist/
+
+# Local state and secrets. .env holds the credentials of a developer's stack and is the one
+# file that must never be baked into a layer.
+.env
+.git/
+.github/
+.idea/
+.vscode/
+.claude/
+
+# Nothing an image needs.
+*.md
+docs/
+load-tests/
+scripts/
+deploy/helm/
+deploy/k8s/
+deploy/grafana/
+deploy/prometheus/
+deploy/tempo/
+**/*.log

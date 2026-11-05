@@ -1011,6 +1011,9 @@ seatrush/
 │   └── invariant-checker/
 ├── deploy/
 │   ├── docker-compose/             # local stack: services + infra + observability
+│   │   ├── Dockerfile              # one image per service, built from the repository root
+│   │   ├── ui.Dockerfile           # the bundle behind nginx
+│   │   └── nginx.conf              # the one origin the client and the API share
 │   ├── helm/seatrush/              # umbrella chart with one subchart per service
 │   ├── k8s/                        # kind config, KEDA objects
 │   ├── grafana/dashboards/
@@ -1021,7 +1024,7 @@ seatrush/
 │   ├── messages/                   # generated JSON Schemas of Kafka messages
 │   ├── benchmarks/
 │   └── diagrams/
-├── scripts/                        # chaos scripts, seed data, helpers
+├── scripts/                        # seed.sh, chaos scripts, helpers
 ├── .github/workflows/
 │   ├── ci.yml                      # format check, build, unit + integration tests, ArchUnit
 │   └── images.yml                  # build and push container images on tag
@@ -1149,26 +1152,33 @@ Main properties (all overridable via environment variables):
 | `seatrush.payment.latency-p50` | payment | `300ms` | Simulated latency median |
 | `seatrush.payment.latency-p99` | payment | `1500ms` | Simulated latency tail |
 | `seatrush.ratelimit.*` | gateway | see config | Token bucket per scope |
+| `SEATRUSH_VERSION` | compose | `dev` | The tag the local images are built and run as |
 
 Spring profiles: `local` (Compose, demo login enabled), `bench` (demo login enabled, verbose metrics), `k8s` (RS256 JWKS, demo login disabled).
 
 ## 23. Running Locally
 
-**Prerequisites**: JDK 25, Docker, Node.js (LTS) for the frontend. Maven is provided by the wrapper.
+**Prerequisites**: Docker, and for working on the code JDK 25 and Node.js (LTS). Maven is provided by the wrapper. Nothing else: the images build the code themselves, so a clone and `make up` is enough to see the system run.
 
 ```bash
+make up           # the whole stack: infra, observability, the six services, the client
+make seed         # demo event with 2,000 seats, on-sale in 2 minutes
+make down         # stop everything and remove volumes
+
 make build        # format check, compile, unit tests
 make test-it      # integration tests (Testcontainers)
-make up           # infrastructure + observability + all services (Docker Compose)
-make seed         # demo event with 2,000 seats, on-sale in 2 minutes
-make ui           # start the frontend (installs its dependencies on the first run)
+make images       # build the container images without starting anything
+make ui           # the frontend dev server, against the stack's gateway
 make ui-build     # format check, unit tests and bundle of the frontend
 make load-small   # 5,000-user load test followed by the invariant checker
 make check        # run the invariant checker alone
-make down         # stop everything and remove volumes
 ```
 
-Local endpoints:
+The first `make up` builds seven images and takes a few minutes, most of it the Maven reactor and the npm install. After that it is seconds: the build stage is shared by the six service images, so the reactor is compiled once and the other five are an unpack and a copy, and an unchanged tree rebuilds nothing at all. `make up` passes `--build` on purpose, so the stack that starts is the code in the working tree rather than whatever was built last.
+
+Then `make seed` creates an event through the public API and prints the two links to open it with. The sale opens two minutes later, which is time enough to open a second window and watch the venue fill from it.
+
+**What is published and what is not.** Only the gateway, the client and the observability tools answer on the host. The five services behind the gateway are reachable from inside the stack network alone, which is the same shape the NetworkPolicies of [§24](#24-deployment-on-kubernetes) give the cluster and the one [§13](#13-security) depends on: a service trusts the `X-User-Id` it is handed because nothing outside can reach it to set one.
 
 | Component | URL |
 |-----------|-----|
@@ -1177,6 +1187,12 @@ Local endpoints:
 | Grafana | http://localhost:3000 |
 | Prometheus | http://localhost:9090 |
 | Tempo (traces, through Grafana Explore or its own API) | http://localhost:3200 |
+
+**The client is served by nginx, not by Vite.** The bundle is static files and `/api` is proxied to the gateway, so the page and the API share an origin and the browser never makes a cross-origin request. That is why there is no CORS configuration anywhere in this repository, and `deploy/docker-compose/nginx.conf` is where that claim is kept true. `make ui` runs the dev server on the same port for working on the client, with the same proxy, so only one of the two is up at a time.
+
+**Working on one service.** Stop its container, run it from the IDE against the rest of the stack: `docker compose stop order-service`, then start the application with the defaults of its `application.yml`, which point at the published ports of the infrastructure. The gateway's downstream URLs in `.env` are there for exactly this, and the stack overrides them with the names its own network resolves.
+
+**The two secrets are set in `.env.example` and are deliberately fake.** Read the base64 and it says so. A service with nothing set generates its own and warns about it, which is fine for a single process and wrong the moment there are two: queue-service mints an admission token and the gateway checks it, so two generated secrets would be two services refusing each other's tokens and every purchase answering `403`. `make up` starts both, so a value that works has to be in the file rather than in a step somebody is told to perform.
 
 ## 24. Deployment on Kubernetes
 

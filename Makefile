@@ -11,12 +11,15 @@ COMPOSE_FILE ?= deploy/docker-compose/docker-compose.yml
 COMPOSE ?= docker compose --file $(COMPOSE_FILE) --env-file .env
 
 .DEFAULT_GOAL := help
-.PHONY: help format build test-it clean up down seed ui ui-build load-small check
+.PHONY: help format build test-it clean up down images seed ui ui-build load-small check
 
 # The frontend is a Node project rather than a Maven module, so it has its own
 # install and its own build.
 UI_DIR ?= frontend/seat-map-ui
 NPM ?= npm
+
+# Where make seed talks to. The gateway's published port, since the seed runs on the host.
+SEED_API_URL ?= http://localhost:8080
 
 help: ## Show this help
 	@grep -hE '^[a-z][a-z-]*:.*## ' $(MAKEFILE_LIST) \
@@ -34,8 +37,13 @@ test-it: ## Full build including the integration tests (Testcontainers, needs Do
 clean: ## Remove every build output
 	$(MVNW) $(MAVEN_FLAGS) clean
 
-up: .env ## Start the local stack: infrastructure, observability and the services that exist
-	$(COMPOSE) up --detach --wait
+up: .env ## Start the whole local stack: infrastructure, observability, the services, the client
+	# --build so a source change is in the image that starts. The build stage is shared by
+	# the six service images and cached, so an unchanged tree rebuilds nothing.
+	$(COMPOSE) up --detach --wait --build
+
+images: .env ## Build the container images without starting anything
+	$(COMPOSE) build
 
 down: .env ## Stop everything and remove the volumes
 	$(COMPOSE) down --volumes --remove-orphans
@@ -46,7 +54,7 @@ down: .env ## Stop everything and remove the volumes
 	@echo "created .env from .env.example"
 
 seed: ## Create a demo event with 2,000 seats, on-sale in 2 minutes
-	@echo "make seed arrives with the inventory service (M1)."; exit 1
+	@SEATRUSH_API_URL=$(SEED_API_URL) ./scripts/seed.sh
 
 ui: $(UI_DIR)/node_modules ## Start the seat map frontend on http://localhost:5173
 	$(NPM) --prefix $(UI_DIR) run dev
