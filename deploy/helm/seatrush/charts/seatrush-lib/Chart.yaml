@@ -1,0 +1,16 @@
+# The templates every service subchart of README section 24 is made of.
+#
+# A library chart and not a sixth copy of a Deployment: the six services differ in their
+# port, their environment and what they have to wait for, and in nothing else. Six
+# Deployments would be six places to forget a probe, a security context or a label, and the
+# service whose manifest was written differently from its neighbours would be a difference
+# nobody chose, found during an incident.
+#
+# Helm merges the named templates of every chart in the tree into one namespace, so a define
+# here is callable from a subchart without being a dependency of it. That is what makes this
+# a direct dependency of the umbrella rather than one vendored six times over.
+apiVersion: v2
+name: seatrush-lib
+description: Shared templates for the SeatRush service subcharts
+type: library
+version: 0.1.0

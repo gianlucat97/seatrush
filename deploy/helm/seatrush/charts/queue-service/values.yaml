@@ -1,0 +1,45 @@
+# The waiting room: the lobby, the queue and the door of a sale (README section 6.2).
+
+replicaCount: 1
+port: 8084
+
+# It owns no database. The queue, the lobby and the slots are Redis structures, which is why
+# a pod of this service can be killed and replaced without anything being lost but the
+# connections it held.
+needs:
+  redis: true
+  # order.events, which is what frees a slot before its admission expires.
+  kafka: true
+
+env:
+  # The event list, read on an interval: what opens the doors is inventory reporting the
+  # sale as ON_SALE and not this service's clock (ADR-0015).
+  SEATRUSH_INVENTORY_BASE_URL: http://{{ .Release.Name }}-inventory-service:8081
+  # The gateway checks the admissions this service mints, so the lifetime is one value both
+  # halves of the door read (README section 22).
+  SEATRUSH_ADMISSION_TOKEN_TTL: "{{ .Values.global.admission.tokenTtl }}"
+  # Both per pod, because the admission job runs on every pod with no leader. Raising the
+  # replica count raises the real admission rate with it, which is the thing to know before
+  # the autoscaling of README section 24 is turned on.
+  SEATRUSH_ADMISSION_RATE_PER_SECOND: "500"
+  SEATRUSH_ADMISSION_MAX_ACTIVE_USERS: "5000"
+  # How late a sale can open, since this is how often the catalog is read.
+  SEATRUSH_QUEUE_CATALOG_REFRESH_INTERVAL: 1s
+  SEATRUSH_QUEUE_POSITION_UPDATE_INTERVAL: 3s
+  SEATRUSH_SSE_HEARTBEAT_INTERVAL: "{{ .Values.global.sse.heartbeatInterval }}"
+  SEATRUSH_SSE_TIMEOUT: "{{ .Values.global.sse.timeout }}"
+
+# The other half of the door, shared with the gateway and with nothing else: two generated
+# secrets would be two services refusing each other's tokens and every purchase answering
+# 403 (README section 13).
+secretEnv:
+  SEATRUSH_ADMISSION_SECRET: admission-secret
+
+# Memory before CPU: a pod of this service holds an SSE connection per waiting client, and
+# what the admission job costs is one Lua call per sale per second however long the queue is.
+resources:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    memory: 1Gi

@@ -29,8 +29,15 @@ post() {
     --request POST --data "${3:-}" "$API$1"
 }
 
-if ! curl --silent --fail --max-time 3 --output /dev/null "$API/actuator/health"; then
-  echo "the gateway does not answer at $API. Start the stack with make up." >&2
+# A routed endpoint and not the actuator, because the actuator is deliberately not reachable
+# from outside the deployment (README sections 13 and 23): through the Ingress of section 24
+# it is not published at all, so a check against it would fail on a cluster where everything
+# is working. Any HTTP status answers the only question being asked, which is whether there
+# is a gateway at this address; `/api/events` with no token is a 401 from the gateway itself,
+# and that is the proof the route exists end to end from where this script is standing.
+if ! curl --silent --max-time 3 --output /dev/null "$API/api/events"; then
+  echo "the gateway does not answer at $API. Start the stack with make up, or a" >&2
+  echo "cluster with make k8s-up." >&2
   exit 1
 fi
 

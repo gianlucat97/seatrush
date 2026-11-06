@@ -69,6 +69,41 @@ jobs:
             prom/prometheus:v3.15.1 \
             check rules /rules/expressions.yml
 
+      # The Helm chart of README section 24, which fails in three quiet ways. A manifest
+      # Kubernetes would reject is a release that half-applies, and the first half is
+      # whichever objects sorted earlier; a chart that has drifted from the Compose stack
+      # runs a service on a default nobody chose; and a URL naming the wrong port renders
+      # without complaint and answers 503 the first time anybody buys a seat.
+      #
+      # Both shapes of the release are rendered, because they are different code paths:
+      # Helm drops a disabled subchart's values, so a template of the umbrella that read one
+      # of them would work with the infrastructure installed and fail without it, which is
+      # exactly the deployment nobody tries until it is a managed cluster.
+      #
+      # The schema version is the one the kind node image of deploy/k8s/kind-cluster.yaml
+      # runs, so what passes here is what the cluster of make k8s-up would accept.
+      #
+      # helm is preinstalled on the runner.
+      - name: Validate the Helm chart
+        run: |
+          python -m pip install --quiet pyyaml
+          helm lint --strict deploy/helm/seatrush
+          mkdir -p target/chart
+          helm template seatrush deploy/helm/seatrush \
+            > target/chart/rendered.yaml
+          helm template seatrush deploy/helm/seatrush \
+            --set infra.enabled=false \
+            --set global.postgres.host=postgres.managed \
+            --set global.redis.host=redis.managed \
+            --set global.kafka.bootstrapServers=kafka.managed:9092 \
+            > target/chart/rendered-managed-infra.yaml
+          python scripts/check-chart.py target/chart/rendered.yaml
+          docker run --rm \
+            --volume "$PWD/target/chart:/chart:ro" \
+            ghcr.io/yannh/kubeconform:v0.7.0 \
+            -strict -summary -kubernetes-version 1.37.0 \
+            /chart/rendered.yaml /chart/rendered-managed-infra.yaml
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest

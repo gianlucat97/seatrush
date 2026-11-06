@@ -1,0 +1,33 @@
+# The local cluster of README section 24, created by make k8s-up.
+#
+# Three nodes and not one, because two of the things the chart says about a pod are only true
+# with somewhere else to put it: a PodDisruptionBudget and a topology spread constraint over a
+# single node are statements nothing can satisfy or violate. The control plane keeps its taint
+# and runs none of the workload, so the release is spread over the two workers.
+#
+# The images are loaded into the two workers and never into the control plane (see
+# scripts/k8s-up.sh): seven images of a few hundred megabytes each is most of the time this
+# takes, and a node nothing is scheduled on has no use for them.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: seatrush
+
+nodes:
+  - role: control-plane
+
+  # The node the ingress controller is pinned to, which is why it is the one with a port
+  # mapped from the host: the controller binds port 80 of its node directly, so the hostPort
+  # and the label have to name the same node or nothing answers and nothing says why.
+  #
+  # 8088 and not 80, because 80 on a Windows host is usually already held by http.sys, and
+  # not 8080 or 5173 either, so a cluster and the Compose stack of README section 23 can be
+  # up at the same time.
+  - role: worker
+    labels:
+      ingress-ready: "true"
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 8088
+        protocol: TCP
+
+  - role: worker

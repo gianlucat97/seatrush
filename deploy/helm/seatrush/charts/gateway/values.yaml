@@ -1,0 +1,39 @@
+# The one door into the system (README section 6.1).
+
+replicaCount: 1
+port: 8080
+
+# It reaches the four services it routes to over HTTP and nothing else: no database, no
+# broker, and the Redis of the rate limiting arrives with it.
+needs:
+  redis: false
+  kafka: false
+
+env:
+  # Service names, so the cluster resolves them and the gateway never learns how many pods
+  # answer. That is also what makes the autoscaling of README section 24 invisible to it.
+  SEATRUSH_GATEWAY_INVENTORY_URL: http://{{ .Release.Name }}-inventory-service:8081
+  SEATRUSH_GATEWAY_ORDER_URL: http://{{ .Release.Name }}-order-service:8082
+  SEATRUSH_GATEWAY_QUEUE_URL: http://{{ .Release.Name }}-queue-service:8084
+  SEATRUSH_GATEWAY_REALTIME_URL: http://{{ .Release.Name }}-realtime-service:8085
+  SEATRUSH_AUTH_TOKEN_TTL: 1h
+  SEATRUSH_ADMISSION_TOKEN_TTL: "{{ .Values.global.admission.tokenTtl }}"
+  # The one place a trace is born (README section 14.2), so this is the one number that
+  # decides how many there are.
+  SEATRUSH_TRACING_SAMPLE_RATE: "1.0"
+
+# Two secrets and not one: a queue made to sign whatever it liked still could not mint an
+# identity (README section 13). Only this service holds the first.
+secretEnv:
+  SEATRUSH_AUTH_SECRET: auth-secret
+  SEATRUSH_ADMISSION_SECRET: admission-secret
+
+# The only service in the repository that is reactive, because this process holds the SSE
+# connection of every waiting client (README section 6.1). CPU is what it spends, on TLS
+# termination it does not do here, on token validation and on copying stream bytes.
+resources:
+  requests:
+    cpu: 300m
+    memory: 512Mi
+  limits:
+    memory: 1Gi

@@ -11,7 +11,8 @@ COMPOSE_FILE ?= deploy/docker-compose/docker-compose.yml
 COMPOSE ?= docker compose --file $(COMPOSE_FILE) --env-file .env
 
 .DEFAULT_GOAL := help
-.PHONY: help format build test-it clean up down images seed ui ui-build load-small check
+.PHONY: help format build test-it clean up down images seed ui ui-build
+.PHONY: k8s-up k8s-down k8s-seed k8s-status k8s-template load-small check
 
 # The frontend is a Node project rather than a Maven module, so it has its own
 # install and its own build.
@@ -22,7 +23,9 @@ NPM ?= npm
 SEED_API_URL ?= http://localhost:8080
 
 help: ## Show this help
-	@grep -hE '^[a-z][a-z-]*:.*## ' $(MAKEFILE_LIST) \
+	# A digit in the class as well as a letter, because the k8s targets below have one in
+	# their name and a target missing from this listing is a target nobody finds.
+	@grep -hE '^[a-z][a-z0-9-]*:.*## ' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*## "}; {printf "  %-12s %s\n", $$1, $$2}'
 
 format: ## Rewrite every file in the project format
@@ -69,6 +72,35 @@ ui-build: $(UI_DIR)/node_modules ## Format check, type check, unit tests and bun
 $(UI_DIR)/node_modules: $(UI_DIR)/package-lock.json
 	$(NPM) --prefix $(UI_DIR) ci
 	@touch $@
+
+# The local Kubernetes cluster of README section 24. Its entry point is a script rather
+# than a recipe, because handing seven locally built images to the nodes that run them is a
+# sequence worth reading.
+K8S_CLUSTER ?= seatrush
+K8S_NAMESPACE ?= seatrush
+K8S_RELEASE ?= seatrush
+HELM_CHART ?= deploy/helm/seatrush
+KUBECTL ?= kubectl --context kind-$(K8S_CLUSTER) --namespace $(K8S_NAMESPACE)
+
+# Where the cluster answers: the ingress controller, through the port deploy/k8s/kind-cluster.yaml
+# maps from the host. One address for the client and the API, which is the same origin the
+# Compose stack serves them from (README section 6.7).
+K8S_URL ?= http://localhost:8088
+
+k8s-up: ## Create the kind cluster and deploy the whole system to it
+	./scripts/k8s-up.sh
+
+k8s-down: ## Delete the kind cluster and everything in it
+	kind delete cluster --name $(K8S_CLUSTER)
+
+k8s-seed: ## Create a demo event in the cluster, on-sale in 2 minutes
+	@SEATRUSH_API_URL=$(K8S_URL) SEATRUSH_UI_URL=$(K8S_URL) ./scripts/seed.sh
+
+k8s-status: ## What is running in the cluster
+	@$(KUBECTL) get pods,svc,ingress --selector app.kubernetes.io/part-of=seatrush
+
+k8s-template: ## Render the chart without a cluster, which is what CI validates
+	helm template $(K8S_RELEASE) $(HELM_CHART)
 
 load-small: ## 5,000-user load test followed by the invariant checker
 	@echo "make load-small arrives with the benchmark suite (M7)."; exit 1

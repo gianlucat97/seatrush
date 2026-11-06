@@ -1,0 +1,55 @@
+# Postgres, Redis and the broker, for a cluster that has none of them.
+#
+# README section 24 had these come from community charts, and that is no longer a road worth
+# taking: the Bitnami charts every such line used to mean stopped publishing images to
+# docker.io/bitnami in August 2025, and the alternative is three operators, three sets of
+# CRDs to install before the release and a `make k8s-up` nobody waits out. What is here
+# instead is the Compose stack of README section 23 expressed as Kubernetes objects, pinned
+# to the same three images, which is the smallest thing that can run the system.
+#
+# It is one flag, and that flag is the point: `infra.enabled=false` with the hosts of the
+# global block set is how the same release runs against a managed Postgres, a managed Redis
+# and a managed broker, and nothing else about it changes. The flag is read by the condition
+# of the umbrella's Chart.yaml, which is why no template here tests it.
+enabled: true
+
+postgres:
+  image: postgres:17-alpine
+  storage: 8Gi
+  # The image steps down to this uid when it is not started as root, and /var/lib/postgresql
+  # in it belongs to the same one.
+  uid: 999
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+redis:
+  image: redis:7.4-alpine
+  uid: 999
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+kafka:
+  # The image is in the global block, because the topics Job of the umbrella runs the same
+  # one and the two must not drift.
+  storage: 8Gi
+  uid: 1000
+  # A fixed cluster id, so the log directory on the volume stays valid when the pod is
+  # replaced: the broker refuses to start on a directory formatted with a different one.
+  clusterId: 5L6g3nShT-eMCtK--X86sw
+  # Twelve partitions per business topic and three per dead letter topic (README section
+  # 10.1), created by the hook of the umbrella. One broker, so a single replica is the only
+  # possible factor.
+  resources:
+    requests:
+      cpu: 200m
+      memory: 1Gi
+    limits:
+      memory: 2Gi

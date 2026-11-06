@@ -1025,7 +1025,7 @@ Grafana screenshots and the Gatling report of each published run are stored in `
 | Code quality | Spotless (google-java-format), Error Prone, JaCoCo; Prettier and the TypeScript compiler for the frontend |
 | Frontend | TypeScript, React, Vite, SVG seat map |
 | Containers | Docker, Jib for image builds |
-| Orchestration | Kubernetes, Helm, HPA, KEDA (scaling on Kafka lag) |
+| Orchestration | Kubernetes, Helm (umbrella chart, library subchart), kind for the local cluster, HPA, KEDA (scaling on Kafka lag) |
 | CI | GitHub Actions |
 
 ## 20. Repository Structure
@@ -1060,8 +1060,11 @@ seatrush/
 │   │   ├── Dockerfile              # one image per service, built from the repository root
 │   │   ├── ui.Dockerfile           # the bundle behind nginx
 │   │   └── nginx.conf              # the one origin the client and the API share
-│   ├── helm/seatrush/              # umbrella chart with one subchart per service
-│   ├── k8s/                        # kind config, KEDA objects
+│   ├── helm/seatrush/              # umbrella chart: one release, the whole system
+│   │   ├── charts/seatrush-lib/    # the templates every service subchart is made of
+│   │   ├── charts/<service>/       # one per service of section 6, plus the client
+│   │   └── charts/infra/           # Postgres, Redis and the broker, for a cluster with none
+│   ├── k8s/                        # kind cluster config, KEDA objects
 │   ├── grafana/dashboards/
 │   └── prometheus/                 # scrape config and alert rules
 ├── docs/
@@ -1070,7 +1073,7 @@ seatrush/
 │   ├── messages/                   # generated JSON Schemas of Kafka messages
 │   ├── benchmarks/
 │   └── diagrams/
-├── scripts/                        # seed.sh, chaos scripts, helpers
+├── scripts/                        # seed.sh, k8s-up.sh, the CI validators, chaos scripts
 ├── .github/workflows/
 │   ├── ci.yml                      # format check, build, unit + integration tests, ArchUnit
 │   └── images.yml                  # build and push container images on tag
@@ -1193,7 +1196,8 @@ Main properties (all overridable via environment variables):
 | `seatrush.sse.heartbeat-interval` | queue, realtime | `15s` | SSE keep-alive comment |
 | `management.tracing.sampling.probability` | gateway | `1.0` | Share of requests that start a trace, which is every trace in the system ([§14.2](#142-tracing)); `SEATRUSH_TRACING_SAMPLE_RATE` |
 | `management.tracing.sampling.probability` | the other five | `0.0` | Roots only, so a background tick starts no trace of its own; `SEATRUSH_TRACING_BACKGROUND_SAMPLE_RATE` |
-| `management.opentelemetry.tracing.export.otlp.endpoint` | all | `http://localhost:4318/v1/traces` | Where spans are exported; unset means no exporter at all; `SEATRUSH_OTLP_ENDPOINT` |
+| `management.opentelemetry.tracing.export.otlp.endpoint` | all | `http://localhost:4318/v1/traces` | Where spans are exported; `SEATRUSH_OTLP_ENDPOINT` |
+| `management.tracing.export.enabled` | all | `true` | The switch that turns the export off. It is this and not an empty endpoint: the autoconfiguration is conditional on that property being present, and the default above makes it always present, so a deployment with nothing collecting spans would export at its own loopback and log it every thirty seconds. Set `false` by the chart of [§24](#24-deployment-on-kubernetes) when no endpoint is given |
 | `seatrush.sse.timeout` | queue, realtime | `30m` | How long one SSE stream may stay open before the client is asked to reconnect |
 | `seatrush.payment.decline-rate` | payment | `0.05` | Simulated decline rate |
 | `seatrush.payment.latency-p50` | payment | `300ms` | Simulated latency median |
@@ -1201,7 +1205,9 @@ Main properties (all overridable via environment variables):
 | `seatrush.ratelimit.*` | gateway | see config | Token bucket per scope |
 | `SEATRUSH_VERSION` | compose | `dev` | The tag the local images are built and run as |
 
-Spring profiles: `local` (Compose, demo login enabled), `bench` (demo login enabled, verbose metrics), `k8s` (RS256 JWKS, demo login disabled).
+Spring profiles: `local` (Compose, demo login enabled), `bench` (demo login enabled, verbose metrics), `k8s` (RS256 JWKS, demo login disabled). The cluster of [§24](#24-deployment-on-kubernetes) runs `local` by default, because the demo login of [§12.1](#121-auth-demo) is how a browser gets a token and a cluster nobody can log in to is not a demo; `k8s` is what a deployment facing anything but a laptop sets, and it brings its own identity provider.
+
+On Kubernetes every one of these is a value of the Helm chart rather than a line of `.env`: the shared ones are in `deploy/helm/seatrush/values.yaml` and a service's own are in its subchart's, next to the service they configure. What a subchart does not set keeps the default of the service's `application.yml`, so a value is in one place and not two.
 
 ## 23. Running Locally
 
@@ -1220,6 +1226,8 @@ make ui-build     # format check, unit tests and bundle of the frontend
 make load-small   # 5,000-user load test followed by the invariant checker
 make check        # run the invariant checker alone
 ```
+
+The same system on a local Kubernetes cluster is `make k8s-up`, which is [§24](#24-deployment-on-kubernetes). It builds the same images this stack does, so the two never run different code, and it publishes on a port of its own so both can be up at once.
 
 The first `make up` builds seven images and takes a few minutes, most of it the Maven reactor and the npm install. After that it is seconds: the build stage is shared by the six service images, so the reactor is compiled once and the other five are an unpack and a copy, and an unchanged tree rebuilds nothing at all. `make up` passes `--build` on purpose, so the stack that starts is the code in the working tree rather than whatever was built last.
 
@@ -1247,17 +1255,155 @@ Then `make seed` creates an event through the public API and prints the two link
 
 ## 24. Deployment on Kubernetes
 
-- One **Helm umbrella chart** (`deploy/helm/seatrush`) with a subchart per service; infrastructure (Kafka, Redis, Postgres) installed via community charts or operators, configurable per environment.
-- **Autoscaling**:
-  - HPA on CPU for gateway, inventory-service;
-  - HPA on the `seatrush_sse_connections` custom metric for queue-service and realtime-service;
-  - KEDA `ScaledObject` on Kafka consumer lag for order-service and payment-service.
-- **Probes**: liveness and readiness via Spring Boot Actuator; readiness fails while relays or Kafka consumers are not connected.
-- **PodDisruptionBudgets** and **topology spread constraints** for every service.
-- **Graceful shutdown**: SSE connections closed with a reconnect hint; consumers commit offsets and relays stop cleanly before termination.
-- **NetworkPolicies**: only the gateway is exposed through the ingress; `/internal/**` endpoints are cluster-only.
-- Topic creation and database migrations run as Helm pre-install/upgrade hooks.
-- Local cluster with **kind** (`make k8s-up`); the chart is cloud-agnostic and runs on any managed Kubernetes (AKS, EKS, GKE) by changing values files only.
+The whole system on a local cluster, from a clone, is two commands:
+
+```bash
+make k8s-up     # create the kind cluster, build the images, deploy the release
+make k8s-seed   # a demo event with 2,000 seats, on sale in two minutes
+```
+
+Then **http://localhost:8088** is the client and `http://localhost:8088/api` is the API, from
+the same origin, which is the property [§6.7](#67-seat-map-ui-frontendseat-map-ui) depends on.
+
+**Prerequisites**: Docker, and `kind`, `kubectl` and `helm` on the `PATH`. Four, and not a
+fifth: the images are built from this tree by the same Compose file [§23](#23-running-locally)
+uses, so nothing has to be pushed anywhere and there is no registry to log in to.
+
+The first `make k8s-up` takes a few minutes, most of it creating the three nodes and handing
+them the seven images. After that it is also the command to run after changing a line of a
+service: the cluster is left alone if it is there, the images are rebuilt only where the tree
+changed, and the release is upgraded rather than reinstalled.
+
+| Command | What it does |
+|---------|--------------|
+| `make k8s-up` | The cluster, the ingress controller, the images and the release |
+| `make k8s-seed` | The demo event of [§23](#23-running-locally), through the Ingress |
+| `make k8s-status` | The pods, services and Ingress of the release |
+| `make k8s-template` | Render the chart with no cluster, which is what CI validates |
+| `make k8s-down` | Delete the cluster and everything in it |
+
+### 24.1 The chart
+
+One **Helm umbrella chart** at `deploy/helm/seatrush` with a subchart per service, which makes
+the whole system one release and one revision. Every subchart is a directory of this
+repository and none has a repository to be fetched from, so a checkout installs with no
+`helm dependency build`, no `Chart.lock` and no network.
+
+- **`charts/seatrush-lib`** is a library chart and holds the Deployment, the Service, the
+  ServiceAccount, the probes and the environment every service is made of. The six services
+  differ in their port, their environment and what they have to wait for, and in nothing else:
+  six Deployments would be six places to forget a probe or a security context, and the service
+  whose manifest was written differently from its neighbours would be a difference nobody
+  chose, found during an incident.
+- **The umbrella's `values.yaml`** holds what every subchart shares and what none may decide
+  on its own: the images, the infrastructure endpoints, the four secrets of
+  [§13](#13-security), and the values two services have to agree on. The admission lifetime is
+  one of those, because queue-service mints the token and the gateway checks it.
+- **A service's own knobs live in its subchart's `values.yaml`**, next to the service they
+  configure, so `charts/queue-service/values.yaml` is where the door of a sale is set rather
+  than a block of a long file forty lines from the next one. Everything there is a variable of
+  [§22](#22-configuration); what a subchart does not set keeps the default of the service's own
+  `application.yml`, so a value lives in one place and not two.
+- **`charts/infra`** is Postgres, Redis and the broker, for a cluster that has none of them:
+  the Compose stack of [§23](#23-running-locally) expressed as Kubernetes objects, pinned to
+  the same three images. `infra.enabled=false` with the three hosts of the global block set is
+  how the same release runs against managed ones, and nothing else about it changes. That is
+  what cloud-agnostic means here, and it is a code path CI renders rather than a claim.
+
+**Probes.** Liveness and readiness come from the actuator groups of [§22](#22-configuration),
+and there is a startup probe as well, because the three answer different questions: a Spring
+Boot service takes tens of seconds to answer either of the first two, and without a startup
+probe the liveness threshold would have to be long enough to cover a cold start, which is
+exactly the patience you do not want once the service is running and wedged.
+
+**Not root, and nothing written.** Every pod of ours runs as uid 10001 on a read-only root
+filesystem with every capability dropped, which is the image of [§23](#23-running-locally) and
+the cluster insisting on it rather than trusting it. One `emptyDir` on `/tmp` covers the two
+things a JVM writes outside its own heap. The exception is the client, and it is the one
+container not built from our Dockerfile: the upstream nginx binds port 80 and rewrites its own
+configuration before starting.
+
+**Secrets.** One Secret per release and not one per service, because two of the four are
+shared: a Secret per service would be the same value written in three places, and what follows
+from them drifting is every purchase command answering `403` with nothing in any log to say
+why. A service still reads only the keys it is given, so the gateway is the one thing that sees
+the key user tokens are signed with and order-service the one thing that sees the key tickets
+are signed with. The values in the chart are the fake ones of [§23](#23-running-locally);
+`global.secrets.existingSecret` is what a real deployment points at a Secret it manages itself.
+
+**The two things that have to exist before a service runs**, handled differently on purpose:
+
+- **The databases** of [§11](#11-data-storage) are created by the Postgres server's own
+  initialisation, from a script the chart mounts, exactly as in the Compose stack. Not a Helm
+  hook: a `pre-install` hook runs before the chart has created the Postgres it would have to
+  connect to, and a `post-install` one runs after Helm has waited for every service to be
+  ready, which is after Flyway has already failed. The entrypoint runs that script while
+  listening on its socket alone, which is also what makes the init container of a service
+  correct, since a server reachable over TCP is a server whose databases are there. The schema
+  inside each database stays with Flyway in the service that owns it.
+- **The topics** of [§10.1](#101-topics) are a Job, as a `post-install` and `pre-upgrade` hook.
+  `post-install` for the same reason, that on a first install there is no broker yet;
+  `pre-upgrade` because by then there is one, and a topic a new release produces to has to
+  exist before the release does. What that costs on a first install is the seconds between the
+  services starting and the topics appearing, during which a consumer logs that its topic is
+  unknown and asks for fresh metadata. Nothing produces in that window: the relays of
+  [§9.5](#95-transactional-outbox-postgres-and-redis) poll and find nothing until there is a
+  sale, and `make k8s-up` seeds one after the hook has run.
+
+**Init containers** are what keep a cold start from becoming a backoff. Flyway is the reason: a
+service whose database is not accepting connections fails to start rather than waiting, and
+Kubernetes answers that with a `CrashLoopBackOff` whose pause doubles up to five minutes. A pod
+held at `Init` for the seconds Postgres takes is the same wait without the backoff, and it is a
+TCP connect rather than a query, from one small image, for all three stores.
+
+**The one way in** is the Ingress, with two paths on one host: `/api` to the gateway and
+everything else to the client. Nothing else is exposed, which is the arrangement
+[§13](#13-security) depends on, a service trusting the `X-User-Id` it is handed because nothing
+outside can reach it to set one. The two streams of this system are silent for minutes at a
+time by design ([§12.2](#122-seat-map), [§12.3](#123-waiting-room)), so the rule carries the
+same three decisions `deploy/docker-compose/nginx.conf` makes: no response buffering, and read
+and send timeouts of an hour. Without the first, a seat map update sits in a proxy buffer until
+the next one arrives; without the other two, a waiting client is disconnected every minute.
+
+### 24.2 The local cluster
+
+`deploy/k8s/kind-cluster.yaml` is three nodes: a control plane that keeps its taint and runs
+none of the workload, and two workers. Three and not one, because two of the things the chart
+will say about a pod are only true with somewhere else to put it, since a PodDisruptionBudget
+and a topology spread constraint over a single node are statements nothing can satisfy or
+violate.
+
+The ingress controller is pinned to the one worker that has a port mapped from the host,
+because it binds port 80 of its node directly and the host reaches it through that mapping.
+The port is **8088**: 80 on a Windows host is usually already held by http.sys, and 8080 and
+5173 belong to the Compose stack, so a cluster and `make up` can be up at the same time.
+
+The images are the ones `make images` builds, loaded into the two workers and never into the
+control plane. They are named in one `kind load` and not seven: the six service images share
+every layer but the last two ([§23](#23-running-locally)), and named together those layers
+cross to each node once instead of six times, which is the difference between a minute and ten.
+
+### 24.3 What the chart does not do yet
+
+Said here rather than left to be found, since M6 of [§26](#26-roadmap) arrives in three
+pieces and this is the first:
+
+- **Autoscaling**: HPA on CPU for the gateway and inventory-service, HPA on the
+  `seatrush_sse_connections` custom metric for queue-service and realtime-service, and a KEDA
+  `ScaledObject` on Kafka consumer lag for order-service and payment-service.
+- **Disruption and placement**: PodDisruptionBudgets and topology spread constraints for every
+  service.
+- **Graceful shutdown**: SSE connections closed with a reconnect hint, consumers committing
+  offsets and relays stopping cleanly before termination. Readiness failing while a relay or a
+  Kafka consumer is not connected is the half of the probes that needs a health contributor in
+  each service rather than a line of the chart.
+- **NetworkPolicies**, so that only the gateway is reachable from the ingress and the
+  `/internal/**` endpoints are cluster-only as a rule the cluster enforces rather than a shape
+  of the manifests.
+- **The observability of [§14](#14-observability) in the cluster.** `global.otlpEndpoint` is
+  empty, so no service exports a span: an endpoint left unset means no exporter at all, which
+  is the right answer for a cluster with nothing collecting them. Prometheus and Grafana arrive
+  with the autoscaling, because an HPA on a custom metric is the thing that has to read them.
 
 ## 25. Architecture Decision Records
 
@@ -1281,6 +1427,7 @@ ADRs live in `docs/adr/` using the format *Context → Decision → Consequences
 | 0014 | Admission as a signed bearer token instead of a lookup against queue-service |
 | 0015 | The lobby opens on inventory's sale status, never on queue-service's own clock |
 | 0016 | Admission tokens minted on read from the slot that backs them, never stored |
+| 0017 | Infrastructure as templates of the chart instead of community charts or operators |
 
 ## 26. Roadmap
 
@@ -1292,6 +1439,7 @@ ADRs live in `docs/adr/` using the format *Context → Decision → Consequences
 | **M4 - Real-time** | realtime-service, snapshot/delta protocol, frontend with live map and spectator mode | Two browsers see each other's holds within 500 ms |
 | **M5 - Observability** | Domain metrics, tracing across Kafka, dashboards as code, alert rules | One checkout visible as a single trace; dashboards provisioned automatically |
 | **M6 - Kubernetes** | Helm charts, HPA, KEDA, probes, PDBs, NetworkPolicies, hooks, kind setup | `make k8s-up` deploys the full system |
+| | *In three parts: the chart, the cluster and the hooks, which is what `make k8s-up` is; then the autoscaling of HPA and KEDA with the in-cluster Prometheus it reads; then the disruption, placement, graceful shutdown and NetworkPolicies ([§24.3](#243-what-the-chart-does-not-do-yet)).* | |
 | **M7 - Benchmark and chaos** | Gatling scenarios, invariant checker, chaos scripts, published results | Results table filled, invariant checker green, chaos run documented |
 | **M8 - Polish** | ADRs complete, OpenAPI and message docs, demo GIF, final README review | - |
 
