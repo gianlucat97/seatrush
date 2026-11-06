@@ -1,0 +1,111 @@
+# The trace store of the cluster (README sections 14.2, 24.4).
+#
+# Here for the same reason Grafana is: once there is something to query spans with, the
+# release can be given an endpoint to export them to, and `global.otlpEndpoint` stops being
+# the empty value that turns tracing off in six services. That endpoint is named in one
+# place, deploy/k8s/release-observability-values.yaml.
+#
+# The configuration is deploy/tempo/tempo.yml, the same file the local stack mounts: a
+# single process holding every role, a five-second idle period so a checkout can be looked
+# at while it is still interesting, and no metrics generator, because the RED metrics of a
+# service come from the service.
+apiVersion: v1
+kind: Service
+metadata:
+  name: tempo
+  labels:
+    app.kubernetes.io/name: tempo
+    app.kubernetes.io/part-of: seatrush-observability
+spec:
+  type: ClusterIP
+  ports:
+    # Queries, which is what the Tempo datasource of README section 14.4 is pointed at.
+    - name: http
+      port: 3200
+      targetPort: http
+    # Where the services push. OTLP over HTTP and no gRPC port, because that is the half of
+    # the protocol the exporter of every service speaks (deploy/tempo/tempo.yml).
+    - name: otlp-http
+      port: 4318
+      targetPort: otlp-http
+  selector:
+    app.kubernetes.io/name: tempo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tempo
+  labels:
+    app.kubernetes.io/name: tempo
+    app.kubernetes.io/part-of: seatrush-observability
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tempo
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tempo
+        app.kubernetes.io/part-of: seatrush-observability
+      annotations:
+        seatrush.io/config-checksum: unset
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        # The uid of the upstream image, which owns /var/tempo in it.
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: tempo
+          image: grafana/tempo:2.9.1
+          args:
+            - -config.file=/etc/tempo/tempo.yml
+          ports:
+            - name: http
+              containerPort: 3200
+            - name: otlp-http
+              containerPort: 4318
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 30
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 768Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: config
+              mountPath: /etc/tempo
+              readOnly: true
+            # The local backend of deploy/tempo/tempo.yml writes its blocks and its WAL
+            # here. An afternoon of traces, gone with the cluster.
+            - name: data
+              mountPath: /var/tempo
+      volumes:
+        - name: config
+          configMap:
+            name: tempo-config
+        - name: data
+          emptyDir: {}

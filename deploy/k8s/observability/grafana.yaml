@@ -1,0 +1,173 @@
+# Grafana in the cluster, with the three dashboards of README section 14.4 already in it.
+#
+# Nothing here is a second copy of those dashboards. The three ConfigMaps this pod mounts
+# are created by scripts/k8s-observability.sh from deploy/grafana, which is the directory
+# the local stack mounts directly: the same JSON, the same datasource files and the same
+# provider. That is possible because of one choice made in prometheus.yaml and tempo.yaml,
+# which is that the two Services are named `prometheus` and `tempo`, the hostnames those
+# datasource files already carry for the Compose network.
+#
+# Provisioned the same way too, so a dashboard is read from the repository and is not
+# editable in the UI: a change made in Grafana is not saved back, and one made in the
+# repository reaches a running Grafana within half a minute.
+#
+# No Ingress. Section 24.1 has exactly one way into the cluster and it is the gateway and
+# the client; an operations console on the same host would be a second one, open to whoever
+# can reach the port. `make k8s-grafana` is a port-forward, which is the honest way to look
+# at a cluster's own tooling.
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/part-of: seatrush-observability
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: grafana
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/part-of: seatrush-observability
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: grafana
+        app.kubernetes.io/part-of: seatrush-observability
+      annotations:
+        # Datasources are read once at startup, so a changed one needs a new pod. The
+        # dashboards do not: the provider rereads them every thirty seconds, and the kubelet
+        # refreshes a mounted ConfigMap within about a minute.
+        seatrush.io/config-checksum: unset
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        # The uid of the upstream image.
+        runAsUser: 472
+        runAsGroup: 472
+        fsGroup: 472
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: grafana
+          image: grafana/grafana:13.2.4
+          env:
+            # The same arrangement as the local stack (README section 23): the dashboards
+            # open without a login, read-only, and the admin user exists for changing
+            # something by hand. The password is not a secret of this system, since there
+            # is nothing behind this Grafana but the metrics of a laptop cluster, and a
+            # Secret here would suggest otherwise.
+            - name: GF_SECURITY_ADMIN_USER
+              value: admin
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: admin
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "true"
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: Viewer
+            - name: GF_LOG_LEVEL
+              value: warn
+          ports:
+            - name: http
+              containerPort: 3000
+          # A startup probe as well as the other two, for the reason the chart gives for the
+          # services (charts/seatrush-lib/templates/_deployment.tpl): this container runs
+          # some ninety schema migrations against its own SQLite before it listens, which
+          # took half a minute on the first run of this manifest, and the liveness probe
+          # fired against a port nothing was on yet. Covering a cold start here is what lets
+          # the liveness threshold below stay short enough to be worth having.
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 3
+            failureThreshold: 40
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 30
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              memory: 512Mi
+          # The root filesystem is writable here, which is the one exception in this
+          # directory and belongs to the upstream image rather than to a choice. Grafana
+          # ships its datasource plugins inside the image under /usr/share/grafana/data and
+          # a background installer moves them into its plugin directory at startup, which
+          # ends in an `unlinkat ... read-only file system` error for each of the fifteen.
+          # The datasources work anyway, since the plugin is registered before the move
+          # fails, and that is exactly why this is worth fixing rather than living with: an
+          # error per plugin on every start is fifteen lines that mean nothing, in the log
+          # somebody reads during an incident.
+          #
+          # Everything else still holds. It runs as uid 472 with no capability and no
+          # privilege escalation, and nothing it writes outlives the pod.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            # Each provisioning directory on its own and never the parent, which is the
+            # mistake the Compose stack documents: mounting /etc/grafana/provisioning hides
+            # the plugins and alerting directories of the image, and Grafana logs an error
+            # for each one it cannot read.
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+              readOnly: true
+            - name: dashboard-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+              readOnly: true
+            # Where the provider of deploy/grafana/provisioning/dashboards/seatrush.yml
+            # looks, which is outside /var/lib/grafana so the JSON does not collide with
+            # Grafana's own database.
+            - name: dashboards
+              mountPath: /etc/grafana/dashboards
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/grafana
+      volumes:
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboard-provider
+          configMap:
+            name: grafana-dashboard-provider
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
+        - name: data
+          # The dashboards are provisioned and the datasources are provisioned, so there is
+          # nothing in Grafana's own store worth keeping: what it holds is the anonymous
+          # user's last-viewed panel. A volume and not the writable root filesystem above,
+          # so the one directory that matters is still the one that is mounted.
+          emptyDir: {}

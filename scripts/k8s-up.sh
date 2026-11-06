@@ -2,10 +2,10 @@
 # The whole system on a local Kubernetes cluster (README section 24), which is what
 # make k8s-up runs.
 #
-# Four steps, and each one is idempotent, so this is also the command to run after changing a
-# line of a service: the cluster is left alone if it is there, the ingress controller is
-# upgraded in place, the images are rebuilt only where the tree changed, and the release is
-# upgraded rather than reinstalled.
+# Five steps, and each one is idempotent, so this is also the command to run after changing a
+# line of a service: the cluster is left alone if it is there, the ingress controller and the
+# add-ons are upgraded in place, the images are rebuilt only where the tree changed, and the
+# release is upgraded rather than reinstalled.
 #
 # It is a script and not a Makefile recipe because of the third step: the images have to be
 # in each node's own image store, and a tag that only exists there cannot be pulled, which is
@@ -18,6 +18,14 @@ RELEASE="${SEATRUSH_K8S_RELEASE:-seatrush}"
 VERSION="${SEATRUSH_VERSION:-dev}"
 KIND_CONFIG="${SEATRUSH_KIND_CONFIG:-deploy/k8s/kind-cluster.yaml}"
 CHART="${SEATRUSH_HELM_CHART:-deploy/helm/seatrush}"
+
+# Whether the cluster gets the observability and the autoscaling machinery of README sections
+# 24.3 and 24.4. One switch for both, because they are one decision: with nothing serving
+# metrics there is nothing for an HPA to read, so a release that kept its autoscalers would
+# have four of them reporting an unknown target and two naming a CRD that is not installed.
+# Set it to 0 for a cluster that is only being used to see the system run.
+OBSERVABILITY="${SEATRUSH_OBSERVABILITY:-1}"
+RELEASE_VALUES=deploy/k8s/release-observability-values.yaml
 
 # Pinned, so the cluster a checkout brings up is the one it was tested against. The chart and
 # the controller are versioned together: 4.15.x is controller 1.15.x.
@@ -81,7 +89,20 @@ helm upgrade ingress-nginx ingress-nginx \
   --timeout 5m
 
 # ---------------------------------------------------------------------------------------
-# 3. The images, built once and handed to the nodes that run them.
+# 3. What measures the release and what scales it (README sections 24.3 and 24.4).
+#
+# A cluster facility and not a part of the release, which is the argument
+# scripts/k8s-observability.sh is written around. Before the release rather than after it for
+# one concrete reason: a ScaledObject is a custom resource, so KEDA's CRDs have to exist
+# before Helm applies a manifest that uses one.
+if [ "$OBSERVABILITY" = "1" ]; then
+  ./scripts/k8s-observability.sh
+else
+  echo "==> skipping the observability and the autoscaling (SEATRUSH_OBSERVABILITY=0)"
+fi
+
+# ---------------------------------------------------------------------------------------
+# 4. The images, built once and handed to the nodes that run them.
 #
 # A node can only start a container from an image in its own store, and these images are in
 # no registry: that is what `kind load` is, and why the pull policy of the chart is
@@ -114,18 +135,30 @@ done
 kind load docker-image $tags --name "$CLUSTER" --nodes "$nodes"
 
 # ---------------------------------------------------------------------------------------
-# 4. The release.
+# 5. The release.
 #
 # --wait, so this command finishes when the system is usable rather than when Kubernetes has
 # accepted the manifests: every service has a readiness probe, and the point of waiting is
 # that the next thing anybody runs is make k8s-seed. The topics hook runs after that wait,
 # which is the one ordering of deploy/helm/seatrush/templates/topics.yaml.
+#
+# The values file and the --set flag are the two shapes of the release of section 24.4, and
+# which one is installed is the switch at the top of this script rather than a default of the
+# chart. The chart cannot default to an endpoint: a service told where to export spans
+# exports them, and with nothing collecting them that is a stack trace every thirty seconds
+# in six services. So the chart's default is off and the collector names itself here.
 echo "==> installing the release $RELEASE"
+if [ "$OBSERVABILITY" = "1" ]; then
+  set -- --values "$RELEASE_VALUES"
+else
+  set -- --set global.autoscaling.enabled=false
+fi
 helm upgrade "$RELEASE" "$CHART" \
   --install \
   --kube-context "$CONTEXT" \
   --namespace "$NAMESPACE" \
   --create-namespace \
+  "$@" \
   --wait \
   --timeout 10m
 
@@ -133,4 +166,8 @@ echo
 echo "the cluster is up. Next:"
 echo "  make k8s-seed       a demo event with 2,000 seats, on sale in two minutes"
 echo "  make k8s-status     what is running"
+if [ "$OBSERVABILITY" = "1" ]; then
+  echo "  make k8s-grafana    the three dashboards of README section 14.4"
+  echo "  make k8s-hpa        what every autoscaler of the release currently reads"
+fi
 echo "  make k8s-down       delete the cluster and everything in it"

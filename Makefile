@@ -13,6 +13,7 @@ COMPOSE ?= docker compose --file $(COMPOSE_FILE) --env-file .env
 .DEFAULT_GOAL := help
 .PHONY: help format build test-it clean up down images seed ui ui-build
 .PHONY: k8s-up k8s-down k8s-seed k8s-status k8s-template load-small check
+.PHONY: k8s-observability k8s-hpa k8s-grafana
 
 # The frontend is a Node project rather than a Maven module, so it has its own
 # install and its own build.
@@ -26,7 +27,7 @@ help: ## Show this help
 	# A digit in the class as well as a letter, because the k8s targets below have one in
 	# their name and a target missing from this listing is a target nobody finds.
 	@grep -hE '^[a-z][a-z0-9-]*:.*## ' $(MAKEFILE_LIST) \
-		| awk 'BEGIN {FS = ":.*## "}; {printf "  %-12s %s\n", $$1, $$2}'
+		| awk 'BEGIN {FS = ":.*## "}; {printf "  %-18s %s\n", $$1, $$2}'
 
 format: ## Rewrite every file in the project format
 	$(MVNW) $(MAVEN_FLAGS) spotless:apply
@@ -81,6 +82,9 @@ K8S_NAMESPACE ?= seatrush
 K8S_RELEASE ?= seatrush
 HELM_CHART ?= deploy/helm/seatrush
 KUBECTL ?= kubectl --context kind-$(K8S_CLUSTER) --namespace $(K8S_NAMESPACE)
+# The add-ons of README section 24.4 live in a namespace of their own, because they are
+# facilities of the cluster and outlive any one release of SeatRush.
+KUBECTL_OBSERVABILITY ?= kubectl --context kind-$(K8S_CLUSTER) --namespace seatrush-observability
 
 # Where the cluster answers: the ingress controller, through the port deploy/k8s/kind-cluster.yaml
 # maps from the host. One address for the client and the API, which is the same origin the
@@ -101,6 +105,22 @@ k8s-status: ## What is running in the cluster
 
 k8s-template: ## Render the chart without a cluster, which is what CI validates
 	helm template $(K8S_RELEASE) $(HELM_CHART)
+
+k8s-observability: ## Install the metrics and autoscaling add-ons alone (README section 24.4)
+	./scripts/k8s-observability.sh
+
+k8s-hpa: ## What every autoscaler of the release currently reads
+	# Both kinds together, because the release has both and reading one of them is reading
+	# two thirds of the answer. A ScaledObject's own HPA is in the first list as well, named
+	# keda-hpa-<service>, which is where its current reading of the lag is.
+	@$(KUBECTL) get hpa,scaledobject
+
+# A port-forward and not an Ingress. Section 24.1 has one way into the cluster and it is the
+# client and the API; an operations console on the same host would be a second one. 3001 on
+# the host, because 3000 is the Grafana of the Compose stack and both can be up at once.
+k8s-grafana: ## Open the dashboards of the cluster on http://localhost:3001
+	@echo "the three dashboards of README section 14.4: http://localhost:3001"
+	@$(KUBECTL_OBSERVABILITY) port-forward service/grafana 3001:3000
 
 load-small: ## 5,000-user load test followed by the invariant checker
 	@echo "make load-small arrives with the benchmark suite (M7)."; exit 1

@@ -37,3 +37,17 @@ resources:
     memory: 512Mi
   limits:
     memory: 1Gi
+
+# CPU, because that is what this service spends and what more pods do more of (README
+# section 24.3). Every request through the door costs token validation and stream copying in
+# proportion to its size, and nothing a pod of this service holds is state: a client whose
+# gateway pod went away reconnects through the Service to another one.
+#
+# 70 percent of the request above, so there is headroom for the burst that arrives while the
+# new pod is starting: a JVM takes tens of seconds to be ready, and a target of 90 would be a
+# fleet that is already saturated by the time the decision is made.
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70

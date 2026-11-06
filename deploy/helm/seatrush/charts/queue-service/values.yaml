@@ -18,11 +18,20 @@ env:
   # The gateway checks the admissions this service mints, so the lifetime is one value both
   # halves of the door read (README section 22).
   SEATRUSH_ADMISSION_TOKEN_TTL: "{{ .Values.global.admission.tokenTtl }}"
-  # Both per pod, because the admission job runs on every pod with no leader. Raising the
-  # replica count raises the real admission rate with it, which is the thing to know before
-  # the autoscaling of README section 24 is turned on.
-  SEATRUSH_ADMISSION_RATE_PER_SECOND: "500"
-  SEATRUSH_ADMISSION_MAX_ACTIVE_USERS: "5000"
+  # Both per pod, because the admission job runs on every pod with no leader, and both are
+  # therefore divided by the `maxReplicas` below: four pods of this release admit the 500 a
+  # second and hold the 5,000 active users README section 22 documents as the defaults, which
+  # are figures about a sale and not about a fleet. The purchase area is bounded by seats and
+  # by the checkouts inventory can absorb, so the number that has to stay fixed as this
+  # service scales is the total.
+  #
+  # Fewer pods therefore open the door more slowly rather than more quickly, which is the
+  # safe half of being wrong about it: a door that is too slow leaves buyers in the queue a
+  # moment longer, and one that is too fast puts more buyers in the purchase area than there
+  # are seats to sell them. The honest fix is a rate shared in Redis the way the queue itself
+  # is, which is a change to the service and not to this chart (README section 24.3).
+  SEATRUSH_ADMISSION_RATE_PER_SECOND: "125"
+  SEATRUSH_ADMISSION_MAX_ACTIVE_USERS: "1250"
   # How late a sale can open, since this is how often the catalog is read.
   SEATRUSH_QUEUE_CATALOG_REFRESH_INTERVAL: 1s
   SEATRUSH_QUEUE_POSITION_UPDATE_INTERVAL: 3s
@@ -43,3 +52,21 @@ resources:
     memory: 512Mi
   limits:
     memory: 1Gi
+
+# Open SSE connections per pod, and not CPU (README section 24.3). A pod of this service is
+# almost idle while holding tens of thousands of waiting clients: what it costs is a socket
+# and a buffer each, and the position update of every three seconds. CPU would therefore
+# stay low right up to the point the pod ran out of memory or of file descriptors, which is
+# the failure this metric is chosen to avoid.
+#
+# The metric is `seatrush_sse_connections` of README section 14.1, read through the custom
+# metrics API of section 24.4. It is the one gauge of that section that is summed rather
+# than maxed, because it counts what a single pod is holding, and that is exactly what makes
+# it an autoscaling signal: an HPA on a Pods metric divides the sum by the pod count, so the
+# figure below is connections per pod.
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 4
+  podMetrics:
+    seatrush_sse_connections: 2000

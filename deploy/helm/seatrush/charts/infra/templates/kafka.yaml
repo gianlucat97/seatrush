@@ -94,9 +94,19 @@ spec:
             - name: KAFKA_LISTENERS
               value: INTERNAL://:9092,CONTROLLER://:9093
             # An advertised address has to be resolvable by the client that receives it, and
-            # inside the cluster that is the Service every service already reaches it by.
+            # it is the Service every service already reaches this broker by, qualified with
+            # the namespace.
+            #
+            # Qualified, because a bare Service name is resolvable from this namespace and
+            # nowhere else, and not every client of this broker is a pod of the release: the
+            # KEDA operator of README section 24.3 reads consumer lag from its own namespace,
+            # where `seatrush-kafka` is nothing. What that looks like is worth knowing,
+            # because it is not a DNS error: the client connects to the bootstrap address it
+            # was given, receives this one in the metadata, and then reports that it has run
+            # out of brokers to talk to. The six services are unaffected, since a pod
+            # resolves an FQDN as happily as a short name.
             - name: KAFKA_ADVERTISED_LISTENERS
-              value: INTERNAL://{{ $name }}:9092
+              value: INTERNAL://{{ $name }}.{{ .Release.Namespace }}.svc:9092
             - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
               value: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
             - name: KAFKA_INTER_BROKER_LISTENER_NAME

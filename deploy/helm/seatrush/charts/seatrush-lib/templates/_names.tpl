@@ -80,6 +80,24 @@ turned off, and nothing else about the release changes.
 {{- end -}}
 
 {{/*
+The same broker, named so that something outside this namespace can reach it.
+
+The short name above is what the six services are given, and it is right for them: a pod
+resolves a bare Service name through its own namespace's search domain. The one reader of
+this address that is not a pod of the release is KEDA, whose operator runs in a namespace of
+its own and therefore resolves `seatrush-kafka` against `keda.svc.cluster.local`, where there
+is nothing. What that looks like is not a DNS error either: the first run of this chart had
+the two ScaledObjects reporting `client has run out of available brokers to talk to: dial tcp
+127.0.0.1:9092`, which is a sarama client with an address it could not resolve.
+
+A managed broker is already a name that resolves from anywhere, so the global value is taken
+as it stands and only the in-cluster default is qualified.
+*/}}
+{{- define "seatrush.kafka.bootstrapServers.qualified" -}}
+{{- .Values.global.kafka.bootstrapServers | default (printf "%s-kafka.%s.svc:9092" .Release.Name .Release.Namespace) -}}
+{{- end -}}
+
+{{/*
 The JDBC url of one service's own database (README section 11). The database name is the
 argument, since the three services that own one each hold credentials for theirs alone.
 */}}
@@ -110,4 +128,24 @@ app.kubernetes.io/part-of: seatrush
 app.kubernetes.io/managed-by: {{ .context.Release.Service }}
 app.kubernetes.io/component: {{ .component }}
 {{ include "seatrush.component.selectorLabels" . }}
+{{- end -}}
+
+{{/*
+Whether a subchart's container is a Spring Boot service of README section 6.
+
+Six of the seven are, and the client is not: it is nginx serving a bundle, so the profile,
+the port variable, the actuator probes and the scrape annotation all mean nothing to it.
+Empty is false for an `if`, which is what makes this usable as a condition.
+
+`default true` is deliberately not used for the flag, because it would read a `false` as
+unset, which is the one value it exists to carry.
+*/}}
+{{- define "seatrush.spring" -}}
+{{- if hasKey .Values "spring" -}}
+{{- if .Values.spring -}}
+true
+{{- end -}}
+{{- else -}}
+true
+{{- end -}}
 {{- end -}}

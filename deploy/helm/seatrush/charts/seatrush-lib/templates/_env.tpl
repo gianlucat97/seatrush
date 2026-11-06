@@ -20,14 +20,9 @@ to be visible in a values file rather than buried here.
 {{- $root := . -}}
 {{- /*
 The client is the one subchart whose container is not a Spring Boot service, so the three
-variables below would mean nothing to it. `default true` is deliberately not used for the
-flag: it would read a `false` as unset, which is the one value it is there to carry.
+variables below would mean nothing to it.
 */ -}}
-{{- $spring := true -}}
-{{- if hasKey .Values "spring" -}}
-{{- $spring = .Values.spring -}}
-{{- end -}}
-{{- if $spring }}
+{{- if include "seatrush.spring" . }}
 - name: SPRING_PROFILES_ACTIVE
   value: {{ .Values.global.profile | quote }}
 {{- /*

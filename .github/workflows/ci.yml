@@ -53,6 +53,24 @@ jobs:
             prom/prometheus:v3.15.1 \
             check config /etc/prometheus/prometheus.yml
 
+      # The cluster has a scrape config of its own, because a list of six containers on a
+      # Compose network is not a pod discovery (README section 24.4). It is the only
+      # observability file this repository has twice, and the alert rules are not: they are
+      # the same deploy/prometheus/alerts.yml, which is why the two files are copied into
+      # one directory here. That is exactly what the ConfigMap of the cluster does, so
+      # `rule_files` resolving is part of what this checks.
+      - name: Validate the cluster scrape config
+        run: |
+          mkdir -p target/cluster-prometheus
+          cp deploy/k8s/observability/prometheus-scrape.yml \
+             target/cluster-prometheus/prometheus.yml
+          cp deploy/prometheus/alerts.yml target/cluster-prometheus/
+          docker run --rm \
+            --volume "$PWD/target/cluster-prometheus:/etc/prometheus:ro" \
+            --entrypoint promtool \
+            prom/prometheus:v3.15.1 \
+            check config /etc/prometheus/prometheus.yml
+
       # The dashboards are configuration too, and they fail quietly: Grafana logs the
       # provisioning error and serves the folder without the dashboard, so the first person
       # to notice is whoever opens it during an incident. The script checks the JSON, the
@@ -75,13 +93,20 @@ jobs:
       # runs a service on a default nobody chose; and a URL naming the wrong port renders
       # without complaint and answers 503 the first time anybody buys a seat.
       #
-      # Both shapes of the release are rendered, because they are different code paths:
-      # Helm drops a disabled subchart's values, so a template of the umbrella that read one
-      # of them would work with the infrastructure installed and fail without it, which is
-      # exactly the deployment nobody tries until it is a managed cluster.
+      # Three shapes of the release are rendered, because they are three different code
+      # paths. Helm drops a disabled subchart's values, so a template of the umbrella that
+      # read one of them would work with the infrastructure installed and fail without it,
+      # which is exactly the deployment nobody tries until it is a managed cluster. And with
+      # the autoscaling off the six Deployments state a replica count where with it on they
+      # must not, which is why the check script is run over two of the three.
       #
       # The schema version is the one the kind node image of deploy/k8s/kind-cluster.yaml
       # runs, so what passes here is what the cluster of make k8s-up would accept.
+      #
+      # ScaledObject is skipped by kind rather than by name of a file, because it is the one
+      # object here whose schema is not part of Kubernetes: it is KEDA's CRD, and the
+      # alternative is fetching a schema catalog over the network to validate two manifests
+      # whose fields a renderer cannot get wrong anyway.
       #
       # helm is preinstalled on the runner.
       - name: Validate the Helm chart
@@ -97,12 +122,38 @@ jobs:
             --set global.redis.host=redis.managed \
             --set global.kafka.bootstrapServers=kafka.managed:9092 \
             > target/chart/rendered-managed-infra.yaml
+          helm template seatrush deploy/helm/seatrush \
+            --set global.autoscaling.enabled=false \
+            > target/chart/rendered-no-autoscaling.yaml
           python scripts/check-chart.py target/chart/rendered.yaml
+          python scripts/check-chart.py target/chart/rendered-no-autoscaling.yaml
           docker run --rm \
             --volume "$PWD/target/chart:/chart:ro" \
             ghcr.io/yannh/kubeconform:v0.7.0 \
             -strict -summary -kubernetes-version 1.37.0 \
-            /chart/rendered.yaml /chart/rendered-managed-infra.yaml
+            -skip ScaledObject \
+            /chart/rendered.yaml \
+            /chart/rendered-managed-infra.yaml \
+            /chart/rendered-no-autoscaling.yaml
+
+      # The add-ons of README section 24.4, which the release does not install and CI has to
+      # check for the same reason it checks the chart: they are manifests, so the way they
+      # fail is a half-applied `kubectl apply` whose first half is whatever sorted earlier.
+      #
+      # prometheus.yml is left out of the list on purpose. It is a Prometheus configuration
+      # that happens to live in this directory and not a Kubernetes manifest, and the step
+      # above is what parses it.
+      - name: Validate the cluster add-ons
+        run: |
+          docker run --rm \
+            --volume "$PWD/deploy/k8s:/k8s:ro" \
+            ghcr.io/yannh/kubeconform:v0.7.0 \
+            -strict -summary -kubernetes-version 1.37.0 \
+            /k8s/observability/namespace.yaml \
+            /k8s/observability/prometheus.yaml \
+            /k8s/observability/kafka-exporter.yaml \
+            /k8s/observability/tempo.yaml \
+            /k8s/observability/grafana.yaml
 
   frontend:
     name: Frontend

@@ -1,0 +1,15 @@
+# The namespace the observability of README section 24.4 lives in.
+#
+# Its own and not the release's, because it does not belong to the release: `helm uninstall`
+# takes SeatRush away and leaves what was watching it, and a second release in a second
+# namespace is scraped by this same Prometheus without installing anything twice.
+#
+# The name is fixed rather than a variable of scripts/k8s-observability.sh, because the
+# ClusterRoleBinding of prometheus.yaml has to name it: a subject of a cluster-scoped binding
+# is a namespaced ServiceAccount, and a manifest cannot read a shell variable.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: seatrush-observability
+  labels:
+    app.kubernetes.io/part-of: seatrush-observability
