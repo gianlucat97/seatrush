@@ -53,6 +53,22 @@ jobs:
             prom/prometheus:v3.15.1 \
             check config /etc/prometheus/prometheus.yml
 
+      # The dashboards are configuration too, and they fail quietly: Grafana logs the
+      # provisioning error and serves the folder without the dashboard, so the first person
+      # to notice is whoever opens it during an incident. The script checks the JSON, the
+      # uids, the panel grid and the datasource, and writes every query out as a rule so
+      # that promtool parses all 57 of them in one pass.
+      - name: Validate the dashboards
+        run: |
+          mkdir -p target/dashboard-rules
+          python scripts/check-dashboards.py \
+            --rules target/dashboard-rules/expressions.yml
+          docker run --rm \
+            --volume "$PWD/target/dashboard-rules:/rules:ro" \
+            --entrypoint promtool \
+            prom/prometheus:v3.15.1 \
+            check rules /rules/expressions.yml
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest

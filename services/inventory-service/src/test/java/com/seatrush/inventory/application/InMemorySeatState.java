@@ -9,6 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.UUID;
 
@@ -48,6 +49,12 @@ final class InMemorySeatState implements SeatStateStore {
   @Override
   public boolean isSoldOut(UUID eventId) {
     return read(eventId).map(SeatState::isSoldOut).orElse(false);
+  }
+
+  @Override
+  public OptionalInt availableSeats(UUID eventId) {
+    SeatState state = states.get(eventId);
+    return state == null ? OptionalInt.empty() : OptionalInt.of(state.availableSeats());
   }
 
   @Override
