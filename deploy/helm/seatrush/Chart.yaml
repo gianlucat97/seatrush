@@ -1,0 +1,61 @@
+# The umbrella chart of README section 24: one release, the whole system.
+#
+# Every subchart is a directory under charts/ of this repository, and none of them has a
+# repository to be fetched from. That is what makes a checkout installable with no
+# `helm dependency build`, no Chart.lock and no network: there is nothing to vendor, because
+# nothing lives anywhere else.
+#
+# They are still declared below rather than left to be discovered, for the two things a
+# declaration buys: `helm lint --strict` fails on a subchart that is in charts/ and not here,
+# which is how a directory added and never wired up is caught, and `condition` is the one
+# switch that turns a subchart off, instead of every template of it reading a flag.
+apiVersion: v2
+name: seatrush
+description: >-
+  A distributed ticketing platform for high-demand flash on-sales: fair waiting room, zero
+  overselling under extreme contention, and a real-time seat map.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/gianlucat97/seatrush
+sources:
+  - https://github.com/gianlucat97/seatrush
+keywords:
+  - ticketing
+  - waiting-room
+  - saga
+  - kafka
+  - redis
+
+dependencies:
+  # The templates the six services and the client are made of. A library chart, so it
+  # contributes no manifest of its own and cannot be turned off: without it the release is
+  # empty rather than smaller.
+  - name: seatrush-lib
+    version: 0.1.0
+
+  # The six services of README section 6, in the order a request travels through them.
+  - name: gateway
+    version: 0.1.0
+  - name: queue-service
+    version: 0.1.0
+  - name: inventory-service
+    version: 0.1.0
+  - name: order-service
+    version: 0.1.0
+  - name: payment-service
+    version: 0.1.0
+  - name: realtime-service
+    version: 0.1.0
+
+  # The demo client (README section 6.7). Off is a perfectly reasonable thing for a release
+  # that is only serving an API.
+  - name: seat-map-ui
+    version: 0.1.0
+    condition: seat-map-ui.enabled
+
+  # Postgres, Redis and the broker, for a cluster that has none of them. Off, with the three
+  # hosts of the global block set, is how the same release runs against managed ones.
+  - name: infra
+    version: 0.1.0
+    condition: infra.enabled

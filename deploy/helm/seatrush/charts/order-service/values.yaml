@@ -1,0 +1,27 @@
+# The checkout SAGA and the tickets it issues (README section 6.4).
+
+replicaCount: 1
+port: 8082
+
+database: order
+needs:
+  redis: false
+  kafka: true
+
+env:
+  # The synchronous freeze of README section 12.7, which is the first thing a checkout does.
+  SEATRUSH_INVENTORY_BASE_URL: http://{{ .Release.Name }}-inventory-service:8081
+  SEATRUSH_CHECKOUT_TIMEOUT: 2m
+
+# The Ed25519 pair tickets are signed with (README section 13), from the release Secret.
+# Never an env value: a private key in a values file is a private key in the release.
+secretEnv:
+  SEATRUSH_TICKETS_PRIVATE_KEY: tickets-private-key
+  SEATRUSH_TICKETS_PUBLIC_KEY: tickets-public-key
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    memory: 1Gi

@@ -1,0 +1,57 @@
+SeatRush {{ .Chart.AppVersion }} is installed as {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+
+What is running:
+
+  kubectl --namespace {{ .Release.Namespace }} get pods --selector app.kubernetes.io/part-of=seatrush
+
+{{- if .Values.ingress.enabled }}
+
+The client and the API share one origin through the Ingress, which is the only thing in this
+release reachable from outside the cluster:
+{{- if .Values.ingress.host }}
+
+  http{{ if .Values.ingress.tls }}s{{ end }}://{{ .Values.ingress.host }}/           the seat map
+  http{{ if .Values.ingress.tls }}s{{ end }}://{{ .Values.ingress.host }}/api/       the gateway
+{{- else }}
+
+  On kind, the ingress controller answers on the port the cluster of deploy/k8s maps:
+
+    http://localhost:8088/           the seat map
+    http://localhost:8088/api/       the gateway
+
+  The host is unset, so the rule matches any: a real deployment names one in
+  ingress.host and brings a certificate for it.
+{{- end }}
+{{- else }}
+
+No Ingress, so nothing is reachable from outside the cluster. A port-forward is the way in:
+
+  kubectl --namespace {{ .Release.Namespace }} port-forward service/{{ include "seatrush.release" . }}-gateway 8080:8080
+{{- end }}
+
+Then a sale, which is a demo event with 2,000 seats opening in two minutes:
+
+  make k8s-seed
+
+{{ if eq .Values.global.profile "local" -}}
+The services run with the `local` profile, so the demo login of README section 12.1 answers
+and a browser can get a token. That is what makes this a demo; the `k8s` profile of README
+section 22 switches it off, and a deployment facing anything but a laptop sets it.
+{{- else -}}
+The services run with the `{{ .Values.global.profile }}` profile, so the demo login of README
+section 12.1 is not there: a client needs a token from somewhere else, and `make k8s-seed`
+cannot get one on its own.
+{{- end }}
+
+{{- if not .Values.global.secrets.existingSecret }}
+
+The four secrets of README section 13 come from this chart's values and are the fake ones:
+decode them and they say so. Anything that is not a laptop sets
+`global.secrets.existingSecret` to a Secret it manages itself.
+{{- end }}
+{{- if not .Values.global.otlpEndpoint }}
+
+Nothing collects traces or metrics in this release: `global.otlpEndpoint` is empty, so no
+service exports a span. The observability of README section 14 arrives in the cluster with
+the autoscaling that reads it.
+{{- end }}

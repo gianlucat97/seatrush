@@ -1,0 +1,22 @@
+# The live half of the seat map, which owns no state at all (README section 6.6).
+
+replicaCount: 1
+port: 8085
+
+# No database, no Redis and no secret. A consumer group per pod over inventory.seat-events
+# is the whole of what it needs, and a pod that is killed costs its clients a snapshot.
+needs:
+  redis: false
+  kafka: true
+
+env:
+  SEATRUSH_REALTIME_BATCH_WINDOW: 200ms
+  SEATRUSH_SSE_HEARTBEAT_INTERVAL: "{{ .Values.global.sse.heartbeatInterval }}"
+  SEATRUSH_SSE_TIMEOUT: "{{ .Values.global.sse.timeout }}"
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    memory: 1Gi

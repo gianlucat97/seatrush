@@ -1,0 +1,171 @@
+# The configuration of a SeatRush release (README sections 22 and 24).
+#
+# What is here is what every subchart shares and what no subchart may decide on its own: the
+# images, the infrastructure endpoints, the secrets and the three values two services have to
+# agree on. A service's own knobs live in its subchart's values.yaml, next to the service
+# they configure, so `charts/queue-service/values.yaml` is where the door of a sale is set
+# and not a block of this file forty lines from the next one.
+#
+# The defaults here run on kind, which is the cluster of `make k8s-up`. A managed cluster is
+# a values file that turns `infra` off and names its three hosts; nothing else changes, which
+# is what README section 24 means by cloud-agnostic.
+
+global:
+  image:
+    # Empty, because the images of `make k8s-images` are loaded into the nodes rather than
+    # pulled: a registry here is what a real cluster sets, together with pullSecrets.
+    registry: ""
+    repository: seatrush
+    # The tag `make k8s-images` builds, which is also the SEATRUSH_VERSION of the Compose
+    # stack. Not `latest`, so a node that already has an image of this name does not quietly
+    # run a different build of it.
+    tag: dev
+    # IfNotPresent and never Always: a tag that is only in the node's own image store, which
+    # is what `kind load` produces, cannot be pulled and Always would fail every pod.
+    pullPolicy: IfNotPresent
+    pullSecrets: []
+
+  # The profile every service starts with (README section 22). `local` on kind, because the
+  # demo login of section 12.1 is how a browser gets a token and the `k8s` profile is the one
+  # that switches it off: a cluster nobody can log in to is not a demo. A deployment that
+  # faces anything but a laptop sets `k8s` and brings its own identity provider.
+  profile: local
+
+  # Where spans go (README section 14.2). Empty turns the export off altogether, which is the
+  # right answer for a cluster with nothing collecting them, and it is a switch rather than an
+  # omission: the property has a localhost default in every application.yml, so a release that
+  # simply left it alone would export at its own loopback and log a stack trace for it every
+  # thirty seconds, in six services (charts/seatrush-lib/templates/_env.tpl). The observability
+  # of section 14 arrives in the cluster with the autoscaling that reads it.
+  otlpEndpoint: ""
+
+  postgres:
+    # Empty means the one this release installs. A host here with `infra.enabled=false` is a
+    # managed server, and the three databases below have to exist on it.
+    host: ""
+    port: 5432
+    user: seatrush
+    # One database per owning service (README section 11). This map is the only list of them:
+    # the init script of the Postgres pod creates exactly these, and each service names the
+    # key it owns.
+    databases:
+      inventory: seatrush_inventory
+      order: seatrush_order
+      payment: seatrush_payment
+
+  redis:
+    host: ""
+    port: 6379
+
+  kafka:
+    bootstrapServers: ""
+    # The image the broker runs and the image the topics Job talks to it with. One value,
+    # because the Job survives `infra.enabled=false` and the broker does not: a release
+    # against a managed broker still has topics to create, and the client that creates them
+    # has to come from somewhere.
+    image: apache/kafka:4.1.0
+
+  # The four secrets of README section 13. Every one of them is base64 and every one of them
+  # here is deliberately fake: read them and they say so. They are values rather than a
+  # generated pair because two services have to agree on one of them, and a service that
+  # generated its own would refuse what the other signed, which is every purchase answering
+  # 403 (section 6.1).
+  #
+  # Anything that is not a laptop sets `existingSecret` to a Secret it manages itself, from a
+  # sealed secret, an external secrets operator or a CSI driver, and leaves these four empty.
+  secrets:
+    existingSecret: ""
+    # openssl rand -base64 32
+    authSecret: c2VhdHJ1c2ggbG9jYWwgZGV2ZWxvcG1lbnQgb25seSAtLSBub3QgYSBzZWNyZXQgMQ==
+    admissionSecret: c2VhdHJ1c2ggbG9jYWwgZGV2ZWxvcG1lbnQgb25seSAtLSBub3QgYSBzZWNyZXQgMg==
+    postgresPassword: seatrush
+    # The Ed25519 pair tickets are signed with. Empty means order-service generates a
+    # throwaway pair at startup and logs the public half, which is enough to buy a ticket and
+    # not enough to verify one tomorrow.
+    #   openssl genpkey -algorithm ed25519 -outform DER | base64 -w0
+    #   openssl pkey -inform DER -pubout -outform DER <key.der | base64 -w0
+    ticketsPrivateKey: ""
+    ticketsPublicKey: ""
+
+  # The admission lifetime is read by queue-service, which mints the token, and by the
+  # gateway, which checks it. One value, because two would be a door whose halves disagreed
+  # about when a turn ends.
+  admission:
+    tokenTtl: 10m
+
+  # How this system treats an idle stream, whatever it is streaming (README sections 6.2 and
+  # 6.6). Both are read by queue-service and by realtime-service.
+  sse:
+    heartbeatInterval: 15s
+    timeout: 30m
+
+  # The timings of the three probes of every service. One block, because a probe is a
+  # statement about Spring Boot and not about any one service: the startup probe is what
+  # covers a cold start, so the liveness threshold below it can stay short enough to be worth
+  # having once the service is running and wedged.
+  probes:
+    startup:
+      periodSeconds: 3
+      # Two minutes, which is a JVM start, a Flyway migration and a Lua script load on a
+      # node that is also starting five other services.
+      failureThreshold: 40
+    liveness:
+      periodSeconds: 10
+      failureThreshold: 3
+    readiness:
+      periodSeconds: 5
+      failureThreshold: 3
+
+  # Not root, nothing extra, and a root filesystem that cannot be written to. The image of
+  # README section 23 already creates this uid; what is here is the cluster insisting on it,
+  # so an image rebuilt without the USER line would fail to start rather than run as root.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+  # The init containers of a service wait with this, so it is one image and a TCP connect
+  # rather than a client per store (charts/seatrush-lib/templates/_env.tpl).
+  waitImage: busybox:1.37
+
+# The one way in (README section 24): the gateway for the API, the client for everything
+# else, and nothing else reachable from outside the cluster at all.
+ingress:
+  enabled: true
+  className: nginx
+  # Empty matches any host, which is what a kind cluster reached at localhost needs. A real
+  # deployment names its host here and adds the TLS block below.
+  host: ""
+  annotations: {}
+  tls: []
+
+# The Job that creates the topics of README section 10.1.
+#
+# Every business topic gets twelve partitions and is keyed by orderId, so all messages of one
+# SAGA are in order, or by eventId, so seat-map updates of one sale are. Each one gets a
+# companion .dlq with three, where a consumer parks a poison message once its retries are
+# exhausted. One broker, so a single replica is the only possible factor.
+topics:
+  enabled: true
+  names:
+    - inventory.seat-events
+    - inventory.commands
+    - inventory.replies
+    - payment.commands
+    - payment.replies
+    - order.events
+  partitions: 12
+  dlqPartitions: 3
+  replicationFactor: 1
+
+# Postgres, Redis and the broker, for a cluster that has none (charts/infra/values.yaml).
+infra:
+  enabled: true

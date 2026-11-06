@@ -1,0 +1,33 @@
+# Owns the seat map, the holds and the sale (README section 6.3).
+
+replicaCount: 1
+port: 8081
+
+# The one of the databases of README section 11 this service owns. Naming it is what wires
+# POSTGRES_URL, the password from the release Secret and the init container that waits for
+# the server to accept connections.
+database: inventory
+needs:
+  # The seat state, the holds, the expiry ZSET and the seat event stream (section 9.2).
+  redis: true
+  # Commands, replies and the seat events the stream relay forwards (section 10.1).
+  kafka: true
+
+# The hold path (README section 22). Everything else this service reads has the default of
+# its application.yml, which is the value section 22 documents: a chart that repeated all
+# twenty of them would be twenty places for a default to drift from the service's own.
+env:
+  SEATRUSH_HOLD_TTL: 5m
+  SEATRUSH_HOLD_MAX_SEATS: "6"
+
+# A request that reflects the one thing this service does under an on-sale, which is one
+# Lua call per hold, and a limit with room for the sweeper, the reconciler and the relay
+# running beside it. No CPU limit anywhere in this chart: a JVM throttled by the cgroup
+# period stalls in the middle of a hold, and the admission rate of section 6.2 is what
+# bounds the load rather than a quota.
+resources:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    memory: 1Gi

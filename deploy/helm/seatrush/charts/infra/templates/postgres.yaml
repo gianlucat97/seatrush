@@ -1,0 +1,140 @@
+{{- $name := printf "%s-postgres" .Release.Name }}
+{{- $labels := dict "context" . "name" "postgres" "component" "infrastructure" }}
+{{/*
+One server, one database per owning service (README section 11). Each service holds
+credentials for its own database only, and Flyway owns the schema inside it.
+
+The databases themselves are created by the server's own initialisation and not by a Helm
+hook, which is the one place README section 24 has to be read the other way round. A
+pre-install hook runs before the chart has created the Postgres it would have to connect to,
+and a post-install one runs after Helm has waited for every service to be ready, which is
+after Flyway has already failed. The entrypoint runs this script on an empty data directory
+while listening on its socket alone, which is the one moment CREATE DATABASE is free of
+concurrent clients, and it is also what makes the init container of a service correct: a
+server reachable over TCP is a server whose databases are there.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-init
+  labels:
+    {{- include "seatrush.component.labels" $labels | nindent 4 }}
+data:
+  01-create-databases.sh: |
+    #!/bin/sh
+    set -eu
+    {{- range $owner, $database := .Values.global.postgres.databases }}
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+      --command 'CREATE DATABASE "{{ $database }}" OWNER "'"$POSTGRES_USER"'"'
+    echo "created database {{ $database }} for {{ $owner }}"
+    {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "seatrush.component.labels" $labels | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgres
+      port: {{ .Values.global.postgres.port }}
+      targetPort: postgres
+  selector:
+    {{- include "seatrush.component.selectorLabels" $labels | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "seatrush.component.labels" $labels | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "seatrush.component.selectorLabels" $labels | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "seatrush.component.labels" $labels | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: {{ .Values.postgres.uid }}
+        runAsGroup: {{ .Values.postgres.uid }}
+        # What makes the volume writable by the uid the entrypoint runs as.
+        fsGroup: {{ .Values.postgres.uid }}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.image | quote }}
+          imagePullPolicy: {{ .Values.global.image.pullPolicy | quote }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: {{ .Values.global.postgres.user | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "seatrush.secretName" . }}
+                  key: postgres-password
+            # The maintenance database the init script connects to; the three service
+            # databases are created from it.
+            - name: POSTGRES_DB
+              value: seatrush
+            # A subdirectory of the mount and not the mount itself, because a volume may
+            # arrive with a lost+found in it and initdb refuses a data directory that is
+            # not empty.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "--username", {{ .Values.global.postgres.user | quote }}, "--dbname", "seatrush"]
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "--username", {{ .Values.global.postgres.user | quote }}, "--dbname", "seatrush"]
+            # Generous, because a server busy with a long query answers this slowly and
+            # restarting it is the one thing that would make that worse.
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.postgres.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+            # The entrypoint writes a socket and a lock file here.
+            - name: run
+              mountPath: /var/run/postgresql
+      volumes:
+        - name: init
+          configMap:
+            name: {{ $name }}-init
+            defaultMode: 0555
+        - name: run
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: {{ .Values.postgres.storage }}

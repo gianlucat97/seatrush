@@ -1,0 +1,70 @@
+{{- if .Values.ingress.enabled }}
+{{/*
+The one way in (README section 24).
+
+Two paths and one host, which is what keeps the claim of section 6.7 true in the cluster:
+`/api` goes to the gateway and everything else to the client, so the page and the API are
+served from one origin and the browser never makes a cross-origin request. In the Compose
+stack that job belongs to the nginx of the client image, which proxies `/api` itself; here it
+is the thing in front of both, and nothing in this repository configures CORS either way.
+
+Nothing else is exposed. The five services behind the gateway have a ClusterIP and no Ingress
+rule, which is the arrangement section 13 depends on: a service trusts the `X-User-Id` it is
+handed because nothing outside can reach it to set one. Making that a rule the cluster
+enforces rather than a shape of the manifests is the NetworkPolicy of section 24, which
+arrives with the rest of the hardening.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "seatrush.release" . }}
+  labels:
+    {{- include "seatrush.component.labels" (dict "context" . "name" "seatrush" "component" "ingress") | nindent 4 }}
+  annotations:
+    {{/*
+    The two streams of this system are silent for minutes at a time by design (README
+    sections 12.2 and 12.3), so nothing in front of them may decide that a quiet response is
+    a dead one, and nothing may hold bytes back waiting for more. These are the same three
+    decisions deploy/docker-compose/nginx.conf makes, in the form the ingress controller
+    reads them: without the first, a seat map update sits in a proxy buffer until the next
+    one arrives, and without the other two a waiting client is disconnected every minute.
+    */}}
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- if .Values.ingress.host }}
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+    {{- else }}
+    - http:
+    {{- end }}
+        paths:
+          {{/*
+          The API first, because the controller matches the longest prefix and `/` would
+          otherwise swallow it.
+          */}}
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "seatrush.release" . }}-gateway
+                port:
+                  name: http
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "seatrush.release" . }}-seat-map-ui
+                port:
+                  name: http
+{{- end }}

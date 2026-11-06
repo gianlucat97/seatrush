@@ -1,0 +1,21 @@
+# The payment provider, simulated (README section 6.5).
+
+replicaCount: 1
+port: 8083
+
+database: payment
+needs:
+  redis: false
+  kafka: true
+
+env:
+  # A twentieth of checkouts declined, which is what makes the compensations of README
+  # section 8.3 something a demo runs into rather than something only a test sees.
+  SEATRUSH_PAYMENT_DECLINE_RATE: "0.05"
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 384Mi
+  limits:
+    memory: 768Mi
