@@ -32,8 +32,14 @@ COPY services/ services/
 # already: the build of README section 23 gates a commit, and an image is made of code that
 # passed it. Running them here instead would need a Postgres, a Redis and a broker inside the
 # builder.
+#
+# -DskipLoadTests leaves the load-tests modules out of the reactor, because the context above is
+# deliberately narrower than the repository: those modules are tools rather than deployables and
+# .dockerignore keeps them out, so a reactor that still listed them would stop on a child module
+# whose directory is absent. It has to be a reactor-shaping flag and not a choice of projects,
+# since Maven reads the whole module tree before -pl is considered.
 RUN --mount=type=cache,target=/root/.m2 \
-    chmod +x mvnw && ./mvnw -B -ntp -DskipTests -DskipITs package
+    chmod +x mvnw && ./mvnw -B -ntp -DskipTests -DskipITs -DskipLoadTests package
 
 # ---------------------------------------------------------------------------------------
 # Unpacking the jar is a stage of its own, so the layers below can be copied one at a time.

@@ -89,7 +89,7 @@ SeatRush is a reference implementation of a system that solves these problems ex
 
 ## 4. Core Invariants
 
-These invariants are the contract of the system. Each one is enforced by a specific mechanism and verified automatically by the [invariant checker](#17-testing-strategy) after every load test.
+These invariants are the contract of the system. Each one is enforced by a specific mechanism and verified automatically by the [invariant checker](#171-the-invariant-checker) after every load test. Five of them are checked there; the other three are properties of an instant rather than of an end state, and are proved by the tests of [section 17](#17-testing-strategy) instead.
 
 | ID | Invariant | Enforced by |
 |----|-----------|-------------|
@@ -940,7 +940,7 @@ There is no Alertmanager in the local stack. A firing rule is visible under **Al
 | order pod dies mid-SAGA | SAGA state is in Postgres; any pod continues when the next reply arrives or when the scheduler fires. |
 | Duplicate Kafka delivery | Ignored via `processed_message`; Lua scripts and payment operations are idempotent. |
 | Kafka temporarily unavailable | Outbox rows and stream entries accumulate; relays publish them when Kafka is back. No data loss. |
-| Redis restart with data loss | Active holds lost (users re-hold); seat state rebuilt from `seat_sale`; frozen holds of running SAGAs fail `CommitSeats` validation → SAGA compensates; Postgres guard prevents overselling throughout. |
+| Redis restart with data loss | Active holds lost (users re-hold); seat state rebuilt from `seat_sale`; frozen holds of running SAGAs fail `CommitSeats` validation → SAGA compensates; Postgres guard prevents overselling throughout. A sale that lost its state and was never rebuilt is what the checker of [§17.1](#171-the-invariant-checker) reports as a sale nothing can be bought in, which is the one failure here that looks like nothing at all from the outside. |
 | Payment provider slow | Checkout latency grows; deadline bounds the wait before the pivot and compensates. |
 | Late `PaymentAuthorized` after timeout | `VoidPayment` sent again; no captured payment for a failed order. |
 | Capture fails after seats committed | Retried with backoff; order stays `SEATS_COMMITTED`; alert fires if retries are exhausted. |
@@ -964,20 +964,49 @@ There is no Alertmanager in the local stack. A firing rule is visible under **Al
 | End-to-end | Docker Compose + REST Assured | Lobby → queue → admission → hold → checkout → ticket; sold-out notice |
 | Load | Gatling (Java DSL) | See [§18](#18-benchmark) |
 | Chaos | Scripts (`kubectl delete pod`, Redis restart, Kafka broker stop) during load | [§16](#16-failure-modes) behaviours |
+| Invariants | The checker of [§17.1](#171-the-invariant-checker), over the stores of a deployment | Every invariant of [§4](#4-core-invariants) that a finished run can still be asked about |
 
 Time-dependent logic (TTLs, deadlines, sweepers) uses an injected `java.time.Clock` so tests are deterministic.
 
-**Invariant checker** (`load-tests/invariant-checker`): a standalone CLI run after every load test. It reads all databases and Redis and verifies:
+### 17.1 The invariant checker
 
-- no `(event_id, seat_id)` sold twice (I1);
-- every `CONFIRMED` order has all its seats in `seat_sale`, a ticket per seat and a captured payment (I3);
-- every `FAILED` order has no sold seats and no captured, non-voided payment (I4);
-- no `S` seat in Redis without a `seat_sale` row and vice versa;
-- no `ACTIVE` hold past its TTL, no SAGA `RUNNING` past its deadline (I7);
-- at most one active hold per user per event (I8);
-- tickets count equals sold seats; sum of captured amounts equals sum of confirmed order totals.
+`load-tests/invariant-checker` is a standalone CLI, run by `make check`, that reads the three databases and the Redis of a running deployment and verifies the invariants of [§4](#4-core-invariants) that a finished run can still be asked about. It is what a load test ends with, and it is the difference between a benchmark that produced a throughput figure and a benchmark that produced a throughput figure nothing was broken for.
 
-The checker prints a report and exits non-zero on any violation, so it can gate CI.
+| Check | What it verifies |
+|-------|------------------|
+| **I1** | No `(event_id, seat_id)` has two `seat_sale` rows, no seat is on two `CONFIRMED` orders, and no seat has two tickets. Three sources, because the primary key only makes the answer impossible in one of them: two confirmed orders over one seat is overselling that the final guard did not catch, and two tickets is two people at one turnstile |
+| **I3** | Every `CONFIRMED` order has each of its seats in `seat_sale` under its own order id, a ticket per seat and no more, a `CAPTURE` that succeeded for the amount the order totals, no successful `VOID`, items that add up to that total, a `COMPLETED` SAGA, and a hold that is `CONSUMED` |
+| **I4** | Every `FAILED` order owns no sold seat, has no ticket, has no successful `CAPTURE`, has a `VOID` if it ever had a successful `AUTHORIZE`, says why it failed, has a `FAILED` SAGA with no compensation outstanding, and leaves no hold still `ACTIVE` or `CHECKOUT` |
+| seat map | Every `S` in the seat map has a `seat_sale` row and every `seat_sale` row says `S`; every `H:<holdId>` names a hold that exists, is live and lists the seat; the available counter equals the number of `A` seats; the seat map has as many seats as the venue |
+| **I7** | No hold is still `ACTIVE` past its expiry, neither sorted set names a hold that has finished or vanished, and no SAGA is `RUNNING` past its deadline |
+| **I8** | No buyer has two live holds for one event, and no `userhold` key points at a hold that is finished, missing, or somebody else's |
+| totals | The tickets of each event equal its seats sold on confirmed orders, the captured amounts equal the confirmed order totals per currency, and no `seat_sale` row belongs to an order the order database has never heard of |
+
+**Three invariants of [§4](#4-core-invariants) are deliberately not here**, because a snapshot taken afterwards cannot speak to them. I2, one active hold per seat, is a property of every instant rather than of the end: the seat map holds one value per seat, so a double hold leaves nothing behind to find, and the concurrency tests above are what prove it. I5, no duplicate effect from a repeated request, has the same shape, and its evidence is a request that was repeated. I6, admission in arrival order, is a sequence of events the queue does not keep.
+
+**Two of the checks need a system in which nothing is in flight**, and they are the two that compare the halves of a checkout against each other. Step 4 of the commit procedure ([§9.6](#96-seat-commit-procedure)) updates the seat map after the transaction that made the sale, and the tickets are written one step later again, so a checkout caught in between is a sale whose seat still says held, or a sale with no ticket yet. Both are the correct state to be in, and both are indistinguishable from the bug being looked for. So the checker waits: `--settle-timeout` is how long it gives every order to reach a terminal state, polling and saying what it is waiting for. A run that never settles is a finding of its own, and the usual reason is the one the counts name, a checkout whose capture has used up its retries and stays `SEATS_COMMITTED` by design ([§9.7](#97-saga-persistence)).
+
+**The exit code is the contract**, because what reads it is a shell. `0` when every check ran and held, `1` when an invariant is broken, and `2` when the check could not be made at all: a store it could not reach, a flag that does not parse, or a system that never stopped working. An answer nobody has is not a guarantee, and a checker that exited `0` on one would turn a gate into decoration. `--settle-timeout 0` is the other mode, a deliberate look at a sale that is still running, where those two checks are skipped and the skip is expected rather than a failure.
+
+**It never writes, and it calls no service.** Read-only connections, no API client and no state of its own: a run can be checked twice, a failed run can be picked over by hand afterwards, and what the report describes is what is in the stores rather than what a service says about it. It also has no idea which load test produced the state it is reading, so the same command checks a benchmark, a demo, and a cluster somebody has been clicking around in.
+
+**It spells the Redis keys and the SQL itself** rather than taking them from the services (ADR-0021). The cost is a second copy of the key names of [§9.2](#92-redis-key-design) and of the columns of [§11](#11-data-storage); what it buys is a checker that is able to disagree. One built out of the service's own key builders and row mappers would agree with the service by construction, and a service that had quietly started writing a hold under a different tag would look perfectly consistent. The integration test is the other half of that argument: it creates its three databases from the migration files of the three services, so the SQL is checked against the schema that is really deployed, and a renamed column fails the build rather than the next benchmark.
+
+Every address has a default that fits the local stack, can be overridden by the environment variable that stack is itself configured with, and can be overridden again by a flag, which is the order `scripts/check.sh` applies them in. `./scripts/check.sh --help` is the whole list.
+
+```bash
+make check                                  # the running stack, waiting for checkouts to finish
+make check CHECK_FLAGS="--settle-timeout 0" # a look at a sale that is still running
+make check CHECK_FLAGS="--event <uuid>"     # one event of a catalog with several
+```
+
+A cluster publishes no store ports, so there it is two port-forwards and the flags that match:
+
+```bash
+kubectl --namespace seatrush port-forward svc/seatrush-postgres 15432:5432 &
+kubectl --namespace seatrush port-forward svc/seatrush-redis 16379:6379 &
+make check CHECK_FLAGS="--postgres-port 15432 --redis-port 16379"
+```
 
 ## 18. Benchmark
 
@@ -990,7 +1019,7 @@ The checker prints a report and exits non-zero on any violation, so it can gate 
 - 10% of users abandon after holding (exercises hold expiry).
 - Payment simulator: p50 300 ms, p99 1.5 s, 5% decline rate.
 - 2,000 spectator clients on the live seat-map stream.
-- Run ends when the event is sold out and every SAGA is terminal; then the invariant checker runs.
+- Run ends when the event is sold out and every SAGA is terminal; then the invariant checker of [§17.1](#171-the-invariant-checker) runs, and the run is published only if it exits zero.
 
 ### 18.2 Environment
 
@@ -1009,7 +1038,7 @@ Documented precisely for reproducibility: Kubernetes cluster type and node sizes
 | Compensations (declined / timeout / unavailable) | TBD |
 | Invariant checker | TBD |
 
-Grafana screenshots and the Gatling report of each published run are stored in `docs/benchmarks/<date>/`.
+Grafana screenshots, the Gatling report and the report of the invariant checker are stored for each published run in `docs/benchmarks/<date>/`.
 
 ## 19. Tech Stack
 
@@ -1056,7 +1085,7 @@ seatrush/
 │   └── seat-map-ui/
 ├── load-tests/
 │   ├── gatling/                    # scenarios (Java DSL)
-│   └── invariant-checker/
+│   └── invariant-checker/          # the standalone CLI of section 17.1, run by make check
 ├── deploy/
 │   ├── docker-compose/             # local stack: services + infra + observability
 │   │   ├── Dockerfile              # one image per service, built from the repository root
@@ -1076,7 +1105,8 @@ seatrush/
 │   ├── messages/                   # generated JSON Schemas of Kafka messages
 │   ├── benchmarks/
 │   └── diagrams/
-├── scripts/                        # seed.sh, the two k8s scripts, the CI validators, chaos
+├── scripts/                        # seed.sh, check.sh, the two k8s scripts, the CI
+│                                   # validators, chaos
 ├── .github/workflows/
 │   ├── ci.yml                      # format check, build, unit + integration tests, ArchUnit
 │   └── images.yml                  # build and push container images on tag
@@ -1102,6 +1132,8 @@ com.seatrush.<service>
 ```
 
 Module dependency rules: services depend only on `libs/*`, never on another service's module. `libs/*` never depend on services.
+
+The `load-tests/*` modules sit in a profile of the parent POM that is on unless `-DskipLoadTests` turns it off, which is what the image build passes. They are modules of the build and their tests run in CI like any others; what they are not is part of a deployable image, and the build context of `deploy/docker-compose/Dockerfile` deliberately does not contain them. It has to be the reactor that is shaped and not the list of projects, because Maven reads every module of the tree before `-pl` is considered and stops on one whose directory is absent.
 
 ## 21. Implementation Guidelines
 
@@ -1219,6 +1251,8 @@ On Kubernetes every one of these is a value of the Helm chart rather than a line
 
 Two of the defaults above are deliberately not what the chart sets, and both are the two admission figures: they are per pod, so `charts/queue-service/values.yaml` divides them by the replica count the autoscaler may reach, which keeps the rate of the sale fixed as the fleet changes ([§24.3](#243-autoscaling)).
 
+The invariant checker of [§17.1](#171-the-invariant-checker) is not in the table and has no `application.yml`, because it is not a Spring application. It is configured by flags, each one defaulting to an environment variable: the addresses are the `POSTGRES_*` and `REDIS_*` of `.env`, so the same file that tells the stack where to listen tells the checker where to look, and its own three are `SEATRUSH_CHECK_SETTLE_TIMEOUT` (`60s`), `SEATRUSH_CHECK_GRACE` (`5s`, how late a sweeper or a scheduler may be before being late is a violation) and `SEATRUSH_CHECK_EXAMPLES` (`10`). `./scripts/check.sh --help` prints the list.
+
 ## 23. Running Locally
 
 **Prerequisites**: Docker, and for working on the code JDK 25 and Node.js (LTS). Maven is provided by the wrapper. Nothing else: the images build the code themselves, so a clone and `make up` is enough to see the system run.
@@ -1234,7 +1268,7 @@ make images       # build the container images without starting anything
 make ui           # the frontend dev server, against the stack's gateway
 make ui-build     # format check, unit tests and bundle of the frontend
 make load-small   # 5,000-user load test followed by the invariant checker
-make check        # run the invariant checker alone
+make check        # verify the invariants of section 4 against the running stack
 ```
 
 The same system on a local Kubernetes cluster is `make k8s-up`, which is [§24](#24-deployment-on-kubernetes). It builds the same images this stack does, so the two never run different code, and it publishes on a port of its own so both can be up at once.
@@ -1242,6 +1276,8 @@ The same system on a local Kubernetes cluster is `make k8s-up`, which is [§24](
 The first `make up` builds seven images and takes a few minutes, most of it the Maven reactor and the npm install. After that it is seconds: the build stage is shared by the six service images, so the reactor is compiled once and the other five are an unpack and a copy, and an unchanged tree rebuilds nothing at all. `make up` passes `--build` on purpose, so the stack that starts is the code in the working tree rather than whatever was built last.
 
 Then `make seed` creates an event through the public API and prints the two links to open it with. The sale opens two minutes later, which is time enough to open a second window and watch the venue fill from it.
+
+`make check` is the invariant checker of [§17.1](#171-the-invariant-checker) pointed at whatever is running: it reads the three databases and Redis, waits for any checkout still in flight, and prints a verdict on every invariant of [§4](#4-core-invariants) along with the figures of the run, exiting non-zero if any of them is broken. Buy a few seats in the browser and run it. Nothing has to be running under load for it to say something useful, and it writes nothing, so there is no state to clean up afterwards.
 
 **What is published and what is not.** Only the gateway, the client and the observability tools answer on the host. The five services behind the gateway are reachable from inside the stack network alone, which is the same shape the NetworkPolicies of [§24](#24-deployment-on-kubernetes) give the cluster and the one [§13](#13-security) depends on: a service trusts the `X-User-Id` it is handed because nothing outside can reach it to set one.
 
@@ -1812,6 +1848,7 @@ ADRs live in `docs/adr/` using the format *Context → Decision → Consequences
 | 0018 | Three autoscaling signals: CPU, SSE connections per pod, Kafka consumer lag |
 | 0019 | The observability stack as an add-on of the cluster, not a subchart of the release |
 | 0020 | Readiness on this pod's own machinery, never on a shared store |
+| 0021 | The invariant checker reads the stores directly and spells their keys and columns itself |
 
 ## 26. Roadmap
 
@@ -1825,6 +1862,7 @@ ADRs live in `docs/adr/` using the format *Context → Decision → Consequences
 | **M6 - Kubernetes** | Helm charts, HPA, KEDA, probes, PDBs, NetworkPolicies, hooks, kind setup | `make k8s-up` deploys the full system |
 | | *Arrived in three parts: the chart, the cluster and the hooks, which is what `make k8s-up` is ([§24.1](#241-the-chart), [§24.2](#242-the-local-cluster)); then the autoscaling of HPA and KEDA with the in-cluster Prometheus it reads ([§24.3](#243-autoscaling), [§24.4](#244-observability-in-the-cluster)); then the disruption, placement, graceful shutdown and NetworkPolicies ([§24.5](#245-disruption-and-placement), [§24.6](#246-graceful-shutdown), [§24.7](#247-networkpolicies)).* | |
 | **M7 - Benchmark and chaos** | Gatling scenarios, invariant checker, chaos scripts, published results | Results table filled, invariant checker green, chaos run documented |
+| | *Arriving in parts. The invariant checker of [§17.1](#171-the-invariant-checker) is here, which is the thing every other part of this milestone is judged by: a load test with nothing to check it against produces a throughput figure and no verdict. The Gatling scenarios of [§18.1](#181-scenario), the chaos scripts and the published results follow.* | |
 | **M8 - Polish** | ADRs complete, OpenAPI and message docs, demo GIF, final README review | - |
 
 **Future work**: Avro + Schema Registry, multi-region active-passive, waitlist for sold-out events, bot-detection signals, CDC-based outbox relay (Debezium) as an alternative implementation, per-section Redis sharding.

@@ -292,4 +292,32 @@
       </plugin>
     </plugins>
   </build>
+
+  <!-- The load-tests modules of README section 20, in a profile that is on unless somebody
+       turns it off. They are part of the build and their tests run in CI like any others; what
+       they are not is part of a deployable image, and the build context of
+       deploy/docker-compose/Dockerfile is deliberately narrower than the repository.
+
+       A profile rather than a plain module, because Maven reads the whole module tree before it
+       applies -pl or anything else: a reactor rooted at a context without load-tests/ stops on
+       a child module that does not exist, before a single project is built, and no choice of
+       projects on the command line can get past it.
+
+       Activated by the absence of a property rather than with activeByDefault, which is the trap
+       that setting carries: a default profile is switched off the moment any other profile is
+       named with -P, and the load tests would then disappear from the reactor without a word.
+       This one is on until -DskipLoadTests says otherwise. -->
+  <profiles>
+    <profile>
+      <id>load-tests</id>
+      <activation>
+        <property>
+          <name>!skipLoadTests</name>
+        </property>
+      </activation>
+      <modules>
+        <module>load-tests/invariant-checker</module>
+      </modules>
+    </profile>
+  </profiles>
 </project>

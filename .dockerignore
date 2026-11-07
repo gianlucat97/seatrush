@@ -22,7 +22,9 @@ target/
 .vscode/
 .claude/
 
-# Nothing an image needs.
+# Nothing an image needs. load-tests/ is the reason the build stage of the Dockerfile names
+# the six deployable modules instead of building the whole reactor: they are modules of the
+# parent POM, and a reactor build inside a context without them stops before it starts.
 *.md
 docs/
 load-tests/
