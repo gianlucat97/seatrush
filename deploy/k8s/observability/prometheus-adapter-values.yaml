@@ -1,0 +1,67 @@
+# prometheus-adapter: how an HPA gets to read a metric a service published (README 24.3).
+#
+# Kubernetes has no idea what `seatrush_sse_connections` is. An HPA asks the API server for
+# a named metric about the pods of a Deployment, and the API server answers only if something
+# is registered as the provider of `custom.metrics.k8s.io`, which is an APIService whose
+# backend translates that question into a query. This adapter is that backend, and the rule below is
+# the translation.
+#
+# It is why the Prometheus of README section 24.4 exists at all: two of the four HPAs scale
+# on a metric the services publish, and the only path from a Micrometer gauge to an
+# autoscaler runs through a scrape and an adapter.
+
+prometheus:
+  # The Service of deploy/k8s/observability/prometheus.yaml, fully qualified because the
+  # adapter runs in a namespace of its own.
+  url: http://prometheus.seatrush-observability.svc
+  port: 9090
+
+# A minute is the default and it is the wrong one here. This is how often the adapter asks
+# Prometheus which series exist. That is not how often it reads a value, which happens per
+# HPA query, but it is how long a pod of a service that has just been scaled up stays
+# invisible to the adapter. Fifteen seconds, because the window this system is scaled in is
+# the first minute of an on-sale (README section 8.1).
+metricsRelistInterval: 15s
+
+rules:
+  # Off, and this is the one value in this file worth arguing about. The chart's default
+  # rules expose every counter and gauge in Prometheus as a custom metric, which is around
+  # a thousand series re-listed on every interval for the six series two HPAs read. It also
+  # makes the custom metrics API a list nobody can read: `kubectl get --raw` on it returns
+  # every JVM and Hikari metric of six services.
+  default: false
+
+  custom:
+    # Open SSE connections, per pod (README section 14.1).
+    #
+    # The namespace and pod labels are what make this addressable: an HPA asks for the
+    # metric of the pods matching a Deployment's selector in its own namespace, so the
+    # series has to carry both, and deploy/k8s/observability/prometheus-scrape.yml is where the
+    # scrape puts them there.
+    #
+    # The sum is over the metric's own `stream` label and nothing else. queue-service
+    # publishes `stream="queue"` and realtime-service `stream="seatmap"`, one series each,
+    # so for either service this is the connection count of that pod. Summing is the correct
+    # aggregation for this one gauge, which is the exception section 14.1 names.
+    #
+    # The HPA then divides the total by the number of pods it is scaling, which is why the
+    # thresholds in the two subcharts are written as connections per pod.
+    - seriesQuery: 'seatrush_sse_connections{namespace!="",pod!=""}'
+      resources:
+        overrides:
+          namespace:
+            resource: namespace
+          pod:
+            resource: pod
+      name:
+        matches: "^seatrush_sse_connections$"
+        as: "seatrush_sse_connections"
+      metricsQuery: 'sum by (<<.GroupBy>>) (<<.Series>>{<<.LabelMatchers>>})'
+
+# Small, because it answers two HPAs every fifteen seconds and relists one metric.
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 256Mi

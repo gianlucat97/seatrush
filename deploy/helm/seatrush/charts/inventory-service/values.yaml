@@ -20,14 +20,35 @@ env:
   SEATRUSH_HOLD_TTL: 5m
   SEATRUSH_HOLD_MAX_SEATS: "6"
 
-# A request that reflects the one thing this service does under an on-sale, which is one
-# Lua call per hold, and a limit with room for the sweeper, the reconciler and the relay
-# running beside it. No CPU limit anywhere in this chart: a JVM throttled by the cgroup
-# period stalls in the middle of a hold, and the admission rate of section 6.2 is what
-# bounds the load rather than a quota.
+# The CPU request is also the denominator of this service's HPA, which is what makes it a
+# capacity statement rather than the scheduling floor it is for everything else in this chart
+# (README section 24.3). 500 millicores and not the 200 the other services ask for, because
+# this pod is never idle: the sweeper runs every second, the outbox relay and the seat event
+# relay ten times a second, the reconciler every thirty, and the sale metrics sample every
+# five. Measured on a kind cluster with no sale running at all, that costs 80 millicores,
+# which against a 200 millicore request is 40 percent of the way to a 70 percent target
+# before a single buyer has arrived.
+#
+# Still no CPU limit anywhere in this chart: a JVM throttled by the cgroup period stalls in
+# the middle of a hold, and the admission rate of section 6.2 is what bounds the load rather
+# than a quota.
 resources:
   requests:
-    cpu: 200m
+    cpu: 500m
     memory: 512Mi
   limits:
     memory: 1Gi
+
+# CPU, for the same reason as the gateway (README section 24.3): the hold path is one Lua
+# call per request and the cost of a pod is the requests it answers.
+#
+# The thing this does not scale is Redis, which is one instance and the serialization point
+# of every hold (README section 9.1). More inventory pods answer more HTTP in parallel and
+# send their EVALSHA to the same place, so the ceiling of this service is that server's and
+# not a replica count. That is a property of the design rather than a limit of the chart: the
+# per-section sharding of section 26 is what raises it.
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70

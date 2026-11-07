@@ -15,7 +15,17 @@ metadata:
     {{- include "seatrush.labels" . | nindent 4 }}
     app.kubernetes.io/component: {{ .Values.component | default "service" }}
 spec:
+  {{- /*
+  Omitted entirely when something scales this service, and that is not a tidiness: a
+  Deployment that states a replica count is a Deployment whose count Helm writes on every
+  upgrade, so a release upgraded during an on-sale would hand back whatever the autoscaler
+  had decided for the one count in this value, and then watch it climb again from there. Kubernetes has
+  no merge rule that saves this; the only way for an HPA to own the field is for nothing
+  else to set it (README section 24.3).
+  */}}
+  {{- if not (include "seatrush.autoscaling.enabled" .) }}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   {{- with .Values.strategy }}
   strategy:
     {{- toYaml . | nindent 4 }}
@@ -36,6 +46,21 @@ spec:
         release and not in the running pods until somebody noticed.
         */}}
         checksum/values: {{ toYaml .Values | sha256sum }}
+        {{- /*
+        How the Prometheus of README section 24.4 finds this pod. It discovers pods by
+        label and keeps the ones that ask to be scraped, which is the arrangement that
+        survives autoscaling: a target list naming six services would name six Services
+        and scrape whichever pod each one load balanced the request to, so a metric that
+        is per pod by definition would be a different pod every ten seconds.
+
+        The port is the one value the container, the Service and the probes already read,
+        so a service moved to another port cannot be scraped on the old one.
+        */}}
+        {{- if include "seatrush.spring" . }}
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /actuator/prometheus
+        prometheus.io/port: {{ .Values.port | quote }}
+        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

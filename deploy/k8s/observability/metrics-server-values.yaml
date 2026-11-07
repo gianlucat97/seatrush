@@ -1,0 +1,29 @@
+# metrics-server: where the CPU readings of an HPA come from (README section 24.3).
+#
+# A managed cluster has this already and kind does not, which is the only reason it is
+# installed here. Without it the two HPAs on CPU report `<unknown>/70%` and never scale, and
+# the message that says why is three levels down in `kubectl describe hpa`.
+#
+# It is also the one add-on of section 24.4 that is not about SeatRush at all: `kubectl top`
+# does not work on a kind cluster until this is there.
+
+# One flag, because the chart appends this list to its own defaults: anything already in
+# those would be the same flag twice, with the last one winning.
+args:
+  # The kubelets of a kind cluster serve their metrics over TLS with a certificate signed by
+  # the cluster CA for an address metrics-server does not dial, so the verification fails on
+  # the name rather than on the trust. The upstream fix is to have the kubelet request a
+  # serving certificate from the cluster signer and approve it, which is two more flags on
+  # the kind config and a controller that has to run first.
+  #
+  # Skipping the check is the right trade for a local cluster and would not be for a real
+  # one: what crosses that connection is a CPU reading, and what is on the other end of it
+  # is a node of a cluster nobody else can reach.
+  - --kubelet-insecure-tls
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 256Mi

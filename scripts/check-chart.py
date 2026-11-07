@@ -25,7 +25,14 @@ What it checks, given the rendered manifests of `helm template`:
   * every container has a readiness probe and a liveness probe;
   * every pod runs as a non-root user, except the one this file names;
   * every container asks for CPU and memory, since a pod without a request is a pod the
-    scheduler places anywhere and the autoscaling of section 24 cannot read.
+    scheduler places anywhere and an HPA on CPU utilisation cannot read;
+  * every Spring Boot pod carries the scrape annotations the Prometheus of section 24.4
+    discovers it by, on the port it actually serves, and the client carries none;
+  * nothing an autoscaler owns also states a replica count, which is the one mistake in this
+    area that looks like nothing and undoes a scale-up on the next `helm upgrade`;
+  * every autoscaler names a Deployment of the release, stays within its own bounds, and
+    reads something that exists: a pod metric the adapter of section 24.4 is configured to
+    serve, and a topic and consumer group the service it scales really uses.
 
 Usage:
     helm template seatrush deploy/helm/seatrush > rendered.yaml
@@ -45,7 +52,8 @@ TOPICS_SCRIPT = REPOSITORY_ROOT / "deploy" / "docker-compose" / "kafka" / "creat
 CHART_VALUES = REPOSITORY_ROOT / "deploy" / "helm" / "seatrush" / "values.yaml"
 
 # The Compose services that are not part of a release: the infrastructure the chart installs
-# from its own subchart, and the observability the cluster does not have yet.
+# from its own subchart, and the observability of README section 24.4, which the cluster gets
+# as an add-on of its own rather than as part of SeatRush.
 NOT_A_SERVICE = {
     "postgres",
     "redis",
@@ -60,10 +68,12 @@ NOT_A_SERVICE = {
 # Compose sets these and the chart deliberately does not. Each one is a decision rather than
 # an omission, so each one is written down with the reason it was made.
 ALLOWED_TO_BE_MISSING = {
-    # Nothing in the cluster collects spans yet, so the chart turns the export off at
-    # management.tracing.export.enabled instead of naming an endpoint nothing is listening
-    # at (README section 24.3). Leaving this variable unset would not do it: the property
-    # has a localhost default in every application.yml.
+    # The collector is not part of the release, so the chart's default is to turn the export
+    # off at management.tracing.export.enabled rather than to name an endpoint nothing is
+    # listening at. Leaving this variable unset would not do it: the property has a localhost
+    # default in every application.yml. The other shape of the release is the one
+    # scripts/k8s-up.sh installs, which passes
+    # deploy/k8s/release-observability-values.yaml and does set this (README section 24.4).
     "SEATRUSH_OTLP_ENDPOINT",
 }
 
@@ -78,6 +88,18 @@ COMPOSE_TO_SUBCHART = {"ui": "seat-map-ui"}
 ALLOWED_TO_RUN_AS_ROOT = {"seat-map-ui"}
 
 WORKLOAD_KINDS = {"Deployment", "StatefulSet", "DaemonSet", "Job"}
+
+# Where the pod metrics of an HPA have to be declared (README section 24.4). The adapter is an
+# add-on of the cluster rather than a part of the release, which is exactly why this needs a
+# drift check: nothing in a `helm template` would notice an HPA reading a metric no adapter
+# serves.
+ADAPTER_VALUES = (
+    REPOSITORY_ROOT / "deploy" / "k8s" / "observability" / "prometheus-adapter-values.yaml"
+)
+
+# The path every Spring Boot service serves its meters on, which the chart annotates a pod
+# with and Prometheus relabels onto the target.
+METRICS_PATH = "/actuator/prometheus"
 
 URL = re.compile(r"^https?://([a-z0-9.-]+):(\d+)")
 
@@ -172,6 +194,46 @@ def chart_topics():
         return yaml.safe_load(handle)["topics"]["names"]
 
 
+def shorten(address):
+    """A cluster address reduced to the Service name and the port it answers on.
+
+    `seatrush-kafka.seatrush.svc:9092` and `seatrush-kafka:9092` are the same broker reached
+    from two namespaces, and the autoscaling check compares the two.
+    """
+    host, _, port = address.rpartition(":")
+    return "%s:%s" % (host.split(".")[0], port)
+
+
+def adapter_metrics():
+    """The metric names prometheus-adapter is configured to serve (README section 24.4).
+
+    An HPA on a `Pods` metric is a question asked of the custom metrics API, and the API
+    answers only for a metric one of the adapter's rules names. A threshold on anything else
+    renders, installs and then reports `<unknown>` for ever, which is an autoscaler that
+    silently does not autoscale.
+    """
+    with ADAPTER_VALUES.open(encoding="utf-8") as handle:
+        rules = yaml.safe_load(handle)["rules"]
+    return {rule["name"]["as"] for rule in rules.get("custom") or []}
+
+
+def service_consumer_groups():
+    """The Kafka consumer group each service joins, read from its own application.yml.
+
+    This is the drift check that earns its place among the autoscaling ones. A KEDA trigger
+    names a consumer group as a string, and a group that does not exist has no lag: the
+    scaler reports zero, the deployment sits at its minimum through an entire on-sale, and
+    nothing anywhere says why. Renaming a group in a service is the way that happens.
+    """
+    groups = {}
+    pattern = re.compile(r"group-id:\s*\$\{KAFKA_GROUP_ID:([^}]+)\}")
+    for application in (REPOSITORY_ROOT / "services").glob("*/src/main/resources/application.yml"):
+        match = pattern.search(application.read_text(encoding="utf-8"))
+        if match:
+            groups[application.parents[3].name] = match.group(1).strip()
+    return groups
+
+
 def check_environment_parity(findings, specs, release):
     """Nothing the local stack had to configure is left to a default in the cluster."""
     for service, expected in compose_environments().items():
@@ -248,6 +310,153 @@ def check_secret_references(findings, specs, keys):
                 )
 
 
+def check_scrape_annotations(findings, manifests):
+    """Every service is discoverable, and on the port it serves.
+
+    The Prometheus of README section 24.4 discovers pods and keeps the ones that ask to be
+    scraped, so a missing annotation is not a missing panel alone: `seatrush_sse_connections`
+    is what two of the HPAs read, so a queue-service nobody scrapes is a queue-service that
+    never scales. A port that disagrees with the container's is the same failure with a
+    target that is merely down.
+    """
+    for manifest in manifests:
+        # The StatefulSets as well, so that an annotation added to one of the infrastructure
+        # pods is caught: Postgres and the broker publish nothing on /actuator/prometheus,
+        # and a target that answers 404 is a target that is down.
+        if manifest.get("kind") not in {"Deployment", "StatefulSet"}:
+            continue
+        workload = manifest["metadata"]["name"]
+        template = manifest["spec"]["template"]
+        annotations = template["metadata"].get("annotations") or {}
+        container = template["spec"]["containers"][0]
+        # The client is nginx serving a bundle: no actuator, nothing to scrape. It is told
+        # apart the way the chart tells it apart, by the absence of a Spring profile.
+        spring = any(
+            variable["name"] == "SPRING_PROFILES_ACTIVE" for variable in container.get("env") or []
+        )
+        scrape = annotations.get("prometheus.io/scrape")
+        if not spring:
+            findings.check(
+                scrape is None,
+                f"{workload}: not a Spring Boot service and still annotated for scraping",
+            )
+            continue
+        if scrape != "true":
+            # One line and not three. A pod with no scrape annotation has no path and no
+            # port either, and the first run of the negative test said so three times for
+            # one mistake.
+            findings.check(False, f"{workload}: no prometheus.io/scrape annotation")
+            continue
+        findings.check(
+            annotations.get("prometheus.io/path") == METRICS_PATH,
+            f"{workload}: prometheus.io/path is {annotations.get('prometheus.io/path')!r} "
+            f"and not {METRICS_PATH!r}",
+        )
+        ports = {port["containerPort"] for port in container.get("ports") or []}
+        annotated = annotations.get("prometheus.io/port")
+        findings.check(
+            annotated is not None and int(annotated) in ports,
+            f"{workload}: annotated for scraping on port {annotated} and listening on "
+            f"{sorted(ports)}",
+        )
+
+
+def check_autoscaling(findings, manifests, specs):
+    """The autoscalers of README section 24.3, and the four ways one of them fails quietly.
+
+    A replica count under an autoscaler is the one worth the file on its own: both objects
+    are valid, the cluster accepts them, and the next `helm upgrade` writes the chart's
+    number over whatever the autoscaler had decided. During an on-sale that is a fleet handed
+    back to one pod.
+    """
+    metrics = adapter_metrics()
+    topics = set(chart_topics())
+    groups = service_consumer_groups()
+    scaled = set()
+
+    for manifest in manifests:
+        kind = manifest.get("kind")
+        if kind not in {"HorizontalPodAutoscaler", "ScaledObject"}:
+            continue
+        name = manifest["metadata"]["name"]
+        spec = manifest["spec"]
+        target = spec["scaleTargetRef"]["name"]
+        scaled.add(target)
+        findings.check(
+            target in specs,
+            f"{name}: scales {target}, which this release does not render",
+        )
+        if kind == "HorizontalPodAutoscaler":
+            findings.check(
+                spec["minReplicas"] <= spec["maxReplicas"],
+                f"{name}: minReplicas {spec['minReplicas']} above maxReplicas "
+                f"{spec['maxReplicas']}",
+            )
+            for metric in spec["metrics"]:
+                if metric["type"] != "Pods":
+                    continue
+                metric_name = metric["pods"]["metric"]["name"]
+                findings.check(
+                    metric_name in metrics,
+                    f"{name}: reads the pod metric {metric_name!r}, and "
+                    f"{ADAPTER_VALUES.name} serves {sorted(metrics)}. An HPA on a metric no "
+                    "adapter exposes reports <unknown> and never scales.",
+                )
+        else:
+            findings.check(
+                spec["minReplicaCount"] <= spec["maxReplicaCount"],
+                f"{name}: minReplicaCount {spec['minReplicaCount']} above maxReplicaCount "
+                f"{spec['maxReplicaCount']}",
+            )
+            findings.check(
+                spec["minReplicaCount"] >= 1,
+                f"{name}: may scale to zero. Both consumers of this release run a scheduler "
+                "as well, so a deployment with no pod is a SAGA nothing advances.",
+            )
+            # The broker the trigger reads has to be the broker the service commits its
+            # offsets to. Not the same string: the service is a pod of this namespace and
+            # gets the short name, while the trigger is dialled by KEDA from a namespace of
+            # its own and has to carry one that resolves there. So the comparison is of what
+            # they resolve to, which is the Service name and the port.
+            bootstrap = {
+                shorten(variable["value"])
+                for variable in specs[target]["containers"][0].get("env") or []
+                if variable["name"] == "KAFKA_BOOTSTRAP_SERVERS"
+            }
+            service = target.split("-", 1)[1] if "-" in target else target
+            for trigger in spec["triggers"]:
+                metadata = trigger["metadata"]
+                findings.check(
+                    metadata["topic"] in topics,
+                    f"{name}: scales on {metadata['topic']!r}, which is not a topic of this "
+                    f"release: {sorted(topics)}",
+                )
+                findings.check(
+                    metadata["consumerGroup"] == groups.get(service),
+                    f"{name}: scales on consumer group {metadata['consumerGroup']!r} and "
+                    f"{service} joins {groups.get(service)!r}. A group with no members has "
+                    "no lag, so this would report zero through an entire on-sale.",
+                )
+                findings.check(
+                    shorten(metadata["bootstrapServers"]) in bootstrap,
+                    f"{name}: reads the broker at {metadata['bootstrapServers']!r} and "
+                    f"{service} is given {sorted(bootstrap)}",
+                )
+
+    for manifest in manifests:
+        if manifest.get("kind") != "Deployment":
+            continue
+        name = manifest["metadata"]["name"]
+        if name not in scaled:
+            continue
+        findings.check(
+            "replicas" not in manifest["spec"],
+            f"{name}: an autoscaler owns this Deployment and it still states replicas "
+            f"{manifest['spec'].get('replicas')}. Helm writes that number on every upgrade, "
+            "so the next one would undo whatever the autoscaler had decided.",
+        )
+
+
 def check_probes(findings, manifests, release):
     """A container with no readiness probe takes traffic before it can serve it."""
     for manifest in manifests:
@@ -322,6 +531,8 @@ def main():
     check_urls(findings, specs, service_ports(manifests))
     check_secret_references(findings, specs, secret_keys(manifests))
     check_probes(findings, manifests, arguments.release)
+    check_scrape_annotations(findings, manifests)
+    check_autoscaling(findings, manifests, specs)
     check_security(findings, specs)
     check_resources(findings, specs)
     check_images(findings, specs)
@@ -330,10 +541,16 @@ def main():
     if problems:
         print(f"\n{problems} problem(s) in {arguments.rendered}")
         return 1
+    autoscalers = sum(
+        1
+        for manifest in manifests
+        if manifest.get("kind") in {"HorizontalPodAutoscaler", "ScaledObject"}
+    )
     print(
-        f"{len(manifests)} manifests, {len(specs)} workloads: environment and topics in step "
-        "with the Compose stack, every URL and secret key resolved, every container probed, "
-        "bounded and not root"
+        f"{len(manifests)} manifests, {len(specs)} workloads, {autoscalers} autoscalers: "
+        "environment and topics in step with the Compose stack, every URL and secret key "
+        "resolved, every container probed, bounded, scrapeable and not root, and nothing "
+        "scaled that also states a replica count"
     )
     return 0
 

@@ -1,0 +1,17 @@
+# What the release is told once the cluster has something watching it (README section 24.4).
+#
+# One value, and it is here rather than in the chart's own values.yaml because of what the
+# chart cannot assume: an endpoint set with nothing listening at it is six services logging
+# an export failure every thirty seconds, so the default has to be the empty one that turns
+# tracing off altogether (charts/seatrush-lib/templates/_env.tpl). This file is the other
+# half of that switch, passed by scripts/k8s-up.sh when the collector is installed, and it
+# is the one place the address of the collector is written down.
+#
+# Nothing here mentions Prometheus, which is the asymmetry of README section 14.1 showing
+# through: spans are pushed and metrics are scraped. A service needs to be told where to
+# send a trace and needs to be told nothing at all to be measured.
+global:
+  # The Tempo Service of deploy/k8s/observability/tempo.yaml, fully qualified because the
+  # release lives in its own namespace. OTLP over HTTP, which is the half of the protocol
+  # the exporter of every service speaks and the only receiver that configuration enables.
+  otlpEndpoint: http://tempo.seatrush-observability.svc:4318/v1/traces

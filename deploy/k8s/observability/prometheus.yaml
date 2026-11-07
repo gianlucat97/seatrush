@@ -1,0 +1,165 @@
+# Prometheus in the cluster (README section 24.4).
+#
+# Plain manifests and not a subchart of the release, because this is a facility of the
+# cluster rather than a part of SeatRush: a release that installed its own Prometheus would,
+# on any cluster that already has one, be a second one nobody asked for, scraping the same
+# pods into a store nobody queries. It is the argument the infra subchart cannot make: the
+# services cannot run without Postgres, Redis and a broker, and they run perfectly well with
+# nothing scraping them.
+#
+# What makes it worth installing here anyway is the autoscaling of section 24.3: two of the
+# four HPAs scale on a metric the services publish, and the only way a Kubernetes HPA can
+# read one is through an adapter in front of a Prometheus.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: seatrush-observability
+---
+# Pods and nothing else. The discovery of prometheus-scrape.yml in this directory is
+# `role: pod` with a label selector, so this is the whole of what it has to be allowed to
+# do, cluster-wide because a release can be installed into any namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: seatrush-prometheus
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: seatrush-observability
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: seatrush-prometheus
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: seatrush-observability
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: seatrush-prometheus
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: seatrush-observability
+---
+# The name is `prometheus` on purpose, and so are Tempo's and the exporter's: it is the name
+# deploy/grafana/provisioning/datasources resolves, so the datasource files of README
+# section 14.4 are mounted into this Grafana unchanged rather than rewritten for the cluster.
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: seatrush-observability
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: prometheus
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: seatrush-observability
+spec:
+  replicas: 1
+  # One instance with one local store, so the new pod must not be started while the old one
+  # still holds the data directory.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: prometheus
+        app.kubernetes.io/part-of: seatrush-observability
+      annotations:
+        # So a changed scrape config or a changed alert rule reaches the running pod: the
+        # ConfigMap is created from the files by scripts/k8s-observability.sh, and a
+        # Deployment whose pod template did not change is one Kubernetes does not roll.
+        # The value is written by that script from a hash of the two files.
+        seatrush.io/config-checksum: unset
+    spec:
+      serviceAccountName: prometheus
+      securityContext:
+        runAsNonRoot: true
+        # The uid the upstream image runs as, and the owner of /prometheus in it.
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v3.15.1
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            # Shorter than the week the local stack keeps, because the volume below is an
+            # emptyDir: a cluster is brought up for an afternoon and `make k8s-down` takes
+            # the node with it, so the only retention that matters is the one a single
+            # session needs.
+            - --storage.tsdb.retention.time=24h
+            - --web.enable-lifecycle
+          ports:
+            - name: http
+              containerPort: 9090
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            periodSeconds: 15
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+              readOnly: true
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            # Two keys: prometheus-scrape.yml from this directory, under the name
+            # Prometheus expects, and alerts.yml from
+            # deploy/prometheus, which is the file the local stack fires the same five rules
+            # from (README section 14.4).
+            name: prometheus-config
+        - name: data
+          # Nothing here outlives the cluster, and that is the right trade for a local one:
+          # a PersistentVolumeClaim on kind is a directory on a node that `make k8s-down`
+          # deletes anyway, and it would make this pod unschedulable on the other worker.
+          emptyDir: {}

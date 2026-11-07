@@ -20,3 +20,23 @@ resources:
     memory: 512Mi
   limits:
     memory: 1Gi
+
+# Open SSE connections per pod, the same signal queue-service scales on and for the same
+# reason (README section 24.3): a pod of this service is a fan-out of deltas to the clients
+# it holds, and the cost of one is a connection rather than a core.
+#
+# Half the threshold of the waiting room, because a seat-map connection is the more expensive
+# of the two. A waiting client is sent its position every three seconds; a client watching
+# the map is sent every change to it within the 200 ms batch window, which during an on-sale
+# is a message every batch to every viewer of that sale.
+#
+# What this does add is a consumer group per pod. Every pod of this service needs every seat
+# event, so it joins a group of its own by design (README section 6.6), and a fleet that
+# scales up and down leaves a group behind for each pod that has gone. That is why the lag
+# panel of section 14.4 collapses them into one series.
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 4
+  podMetrics:
+    seatrush_sse_connections: 1000

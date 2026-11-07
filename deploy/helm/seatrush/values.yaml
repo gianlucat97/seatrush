@@ -35,8 +35,13 @@ global:
   # right answer for a cluster with nothing collecting them, and it is a switch rather than an
   # omission: the property has a localhost default in every application.yml, so a release that
   # simply left it alone would export at its own loopback and log a stack trace for it every
-  # thirty seconds, in six services (charts/seatrush-lib/templates/_env.tpl). The observability
-  # of section 14 arrives in the cluster with the autoscaling that reads it.
+  # thirty seconds, in six services (charts/seatrush-lib/templates/_env.tpl).
+  #
+  # Empty is still the default here, because the collector is not part of this release: the
+  # observability of README section 24.4 is a facility of the cluster, and a managed cluster
+  # has its own. `make k8s-up` installs it and names it with the values file
+  # deploy/k8s/release-observability-values.yaml, which is the one place that endpoint is
+  # written down.
   otlpEndpoint: ""
 
   postgres:
@@ -135,6 +140,57 @@ global:
   # The init containers of a service wait with this, so it is one image and a TCP connect
   # rather than a client per store (charts/seatrush-lib/templates/_env.tpl).
   waitImage: busybox:1.37
+
+  # The autoscaling of README section 24.3, which is two mechanisms over six services: an
+  # HPA on CPU for the gateway and inventory-service, an HPA on the SSE connections a pod
+  # holds for queue-service and realtime-service, and a KEDA ScaledObject on consumer group
+  # lag for order-service and payment-service. What scales a given service, and at what
+  # threshold, is in that service's own values; here is only what they share.
+  #
+  # One switch over all six, and it is what a cluster with no metrics pipeline sets: with
+  # this off the release renders the replica counts of the subcharts and refers to no metrics
+  # API and no CRD at all. `make k8s-up` installs what the three readings come from, which is
+  # metrics-server for CPU, prometheus-adapter for the pod metric and KEDA for the lag.
+  autoscaling:
+    enabled: true
+
+    # How the four HPAs and the two KEDA ones are allowed to move, and it is deliberately not
+    # symmetric. Adding a pod during a flash on-sale is urgent: the lobby of README section
+    # 8.1 fills in seconds, so there is no stabilisation window at all on the way up and the
+    # fleet may double in fifteen. Removing one is never urgent and is not free: a pod of
+    # either SSE service takes its clients' connections with it, and a pod of either consumer
+    # hands a batch back to be redelivered. So the way down waits five minutes for the
+    # reading to hold and then moves one pod a minute.
+    behavior:
+      scaleUp:
+        stabilizationWindowSeconds: 0
+        policies:
+          # Whichever is larger, which is what makes this useful at both ends of the range:
+          # the percentage is the one that matters once there are several pods, and the
+          # absolute step is the one that matters when there is one.
+          - type: Percent
+            value: 100
+            periodSeconds: 15
+          - type: Pods
+            value: 2
+            periodSeconds: 15
+        selectPolicy: Max
+      scaleDown:
+        stabilizationWindowSeconds: 300
+        policies:
+          - type: Pods
+            value: 1
+            periodSeconds: 60
+
+  # Whether the ScaledObjects of order-service and payment-service are rendered at all.
+  #
+  # Separate from the switch above because it is a different question: that one is whether
+  # this release scales, this one is whether the cluster has KEDA's CRD. A manifest of a kind
+  # the API server does not know is not a degraded release, it is an install that fails, so a
+  # cluster without the operator turns this off and keeps the four HPAs, which need nothing
+  # installed beyond the metrics they read.
+  keda:
+    enabled: true
 
 # The one way in (README section 24): the gateway for the API, the client for everything
 # else, and nothing else reachable from outside the cluster at all.

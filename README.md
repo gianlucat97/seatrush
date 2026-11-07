@@ -823,7 +823,7 @@ All endpoints are served through the gateway under `/api`. Errors follow **RFC 9
 
 ### 14.1 Metrics
 
-Micrometer to Prometheus, which scrapes `/actuator/prometheus` on every service over the stack network. Besides the standard JVM, HTTP, Kafka client and Hikari metrics, each service exposes the domain metrics below.
+Micrometer to Prometheus, which scrapes `/actuator/prometheus` on every service over the stack network. In the cluster it discovers the pods instead and scrapes each one of them, which is the same decision one level down ([§24.4](#244-observability-in-the-cluster)): a scrape of a Service would land on whichever pod it load balanced to. Besides the standard JVM, HTTP, Kafka client and Hikari metrics, each service exposes the domain metrics below.
 
 Every meter carries a **`service` label**, set from `spring.application.name` by `libs/observability`. Prometheus already labels a series with the job and the instance it came from, and that is exactly why the tag exists: those two say how a metric was collected, not what produced it, and the same metric arrives under a Compose service name here and a pod name in Kubernetes. A dashboard that selected on them would be a dashboard for one deployment.
 
@@ -857,7 +857,7 @@ Every meter carries a **`service` label**, set from `spring.application.name` by
 | `seatrush_sse_connections{stream}` | gauge | Open SSE connections per pod (`queue`, `seatmap`) |
 | `seatrush_realtime_propagation_seconds` | histogram | Time from seat change (`occurredAt`) to delta sent |
 
-**Six of the seven gauges describe shared state and have to be aggregated with a `max`, never a `sum`**: `seatrush_queue_length`, `seatrush_queue_active_users`, `seatrush_saga_stuck`, `seatrush_outbox_lag_seconds`, `seatrush_seats_available` and `seatrush_seats_capacity`. The state lives in Redis or in Postgres, not in the pod, so every replica publishes its own reading of the same number and a sum would multiply it by the replica count. `seatrush_sse_connections` is the one exception and the only metric here that must be summed: it counts the connections a single pod is holding, and the figure anybody wants is the total across them.
+**Six of the seven gauges describe shared state and have to be aggregated with a `max`, never a `sum`**: `seatrush_queue_length`, `seatrush_queue_active_users`, `seatrush_saga_stuck`, `seatrush_outbox_lag_seconds`, `seatrush_seats_available` and `seatrush_seats_capacity`. The state lives in Redis or in Postgres, not in the pod, so every replica publishes its own reading of the same number and a sum would multiply it by the replica count. `seatrush_sse_connections` is the one exception and the only metric here that must be summed: it counts the connections a single pod is holding, and the figure anybody wants is the total across them. That property is also what makes it the one metric in this table an autoscaler reads ([§24.3](#243-autoscaling)).
 
 **A gauge is sampled by the job that already knows the answer, never by the scrape.** The waiting room sizes are read by a scheduled sample in queue-service, the seats left by one in inventory-service, the outbox lag by the relay pass that just claimed the rows, the stuck checkouts by the scheduler pass that just tried to move them. The alternative is for the gauge function itself to call Redis or Postgres, which would put a blocking round trip inside the response to a scrape: a store that stalled would then take the metrics endpoint down with it, at the one moment anybody is reading it. It also means a failed sample keeps the previous reading, which is the right answer for all three, since a waiting room that could not be measured has not emptied.
 
@@ -1064,16 +1064,17 @@ seatrush/
 │   │   ├── charts/seatrush-lib/    # the templates every service subchart is made of
 │   │   ├── charts/<service>/       # one per service of section 6, plus the client
 │   │   └── charts/infra/           # Postgres, Redis and the broker, for a cluster with none
-│   ├── k8s/                        # kind cluster config, KEDA objects
-│   ├── grafana/dashboards/
-│   └── prometheus/                 # scrape config and alert rules
+│   ├── k8s/                        # kind cluster config, and the add-ons of section 24.4
+│   │   └── observability/          # Prometheus, Grafana, Tempo, the exporter, the adapter
+│   ├── grafana/dashboards/         # read by the Compose stack and by the cluster alike
+│   └── prometheus/                 # scrape config of the local stack, and the alert rules
 ├── docs/
 │   ├── adr/
 │   ├── api/                        # generated OpenAPI specs
 │   ├── messages/                   # generated JSON Schemas of Kafka messages
 │   ├── benchmarks/
 │   └── diagrams/
-├── scripts/                        # seed.sh, k8s-up.sh, the CI validators, chaos scripts
+├── scripts/                        # seed.sh, the two k8s scripts, the CI validators, chaos
 ├── .github/workflows/
 │   ├── ci.yml                      # format check, build, unit + integration tests, ArchUnit
 │   └── images.yml                  # build and push container images on tag
@@ -1209,6 +1210,8 @@ Spring profiles: `local` (Compose, demo login enabled), `bench` (demo login enab
 
 On Kubernetes every one of these is a value of the Helm chart rather than a line of `.env`: the shared ones are in `deploy/helm/seatrush/values.yaml` and a service's own are in its subchart's, next to the service they configure. What a subchart does not set keeps the default of the service's `application.yml`, so a value is in one place and not two.
 
+Two of the defaults above are deliberately not what the chart sets, and both are the two admission figures: they are per pod, so `charts/queue-service/values.yaml` divides them by the replica count the autoscaler may reach, which keeps the rate of the sale fixed as the fleet changes ([§24.3](#243-autoscaling)).
+
 ## 23. Running Locally
 
 **Prerequisites**: Docker, and for working on the code JDK 25 and Node.js (LTS). Maven is provided by the wrapper. Nothing else: the images build the code themselves, so a clone and `make up` is enough to see the system run.
@@ -1276,9 +1279,12 @@ changed, and the release is upgraded rather than reinstalled.
 
 | Command | What it does |
 |---------|--------------|
-| `make k8s-up` | The cluster, the ingress controller, the images and the release |
+| `make k8s-up` | The cluster, the ingress controller, the add-ons, the images and the release |
 | `make k8s-seed` | The demo event of [§23](#23-running-locally), through the Ingress |
 | `make k8s-status` | The pods, services and Ingress of the release |
+| `make k8s-hpa` | What every autoscaler of the release currently reads ([§24.3](#243-autoscaling)) |
+| `make k8s-grafana` | The three dashboards of [§14.4](#144-dashboards-and-alerts), on port 3001 |
+| `make k8s-observability` | The metrics and autoscaling add-ons alone ([§24.4](#244-observability-in-the-cluster)) |
 | `make k8s-template` | Render the chart with no cluster, which is what CI validates |
 | `make k8s-down` | Delete the cluster and everything in it |
 
@@ -1371,7 +1377,8 @@ the next one arrives; without the other two, a waiting client is disconnected ev
 none of the workload, and two workers. Three and not one, because two of the things the chart
 will say about a pod are only true with somewhere else to put it, since a PodDisruptionBudget
 and a topology spread constraint over a single node are statements nothing can satisfy or
-violate.
+violate ([§24.5](#245-what-the-chart-does-not-do-yet)). It is also what gives the autoscaling
+of [§24.3](#243-autoscaling) somewhere to put the pods it adds.
 
 The ingress controller is pinned to the one worker that has a port mapped from the host,
 because it binds port 80 of its node directly and the host reaches it through that mapping.
@@ -1383,27 +1390,238 @@ control plane. They are named in one `kind load` and not seven: the six service 
 every layer but the last two ([§23](#23-running-locally)), and named together those layers
 cross to each node once instead of six times, which is the difference between a minute and ten.
 
-### 24.3 What the chart does not do yet
+### 24.3 Autoscaling
 
-Said here rather than left to be found, since M6 of [§26](#26-roadmap) arrives in three
-pieces and this is the first:
+Six services and three signals, and the reason there is more than one is that CPU describes
+two of them and lies about the other four.
 
-- **Autoscaling**: HPA on CPU for the gateway and inventory-service, HPA on the
-  `seatrush_sse_connections` custom metric for queue-service and realtime-service, and a KEDA
-  `ScaledObject` on Kafka consumer lag for order-service and payment-service.
+| Service | Scales on | Range | Threshold |
+|---------|-----------|-------|-----------|
+| gateway | CPU utilisation | 1 - 4 | 70% of its request |
+| inventory-service | CPU utilisation | 1 - 4 | 70% of its request |
+| queue-service | `seatrush_sse_connections` | 1 - 4 | 2,000 connections per pod |
+| realtime-service | `seatrush_sse_connections` | 1 - 4 | 1,000 connections per pod |
+| order-service | consumer lag of its group | 1 - 4 | 50 records per pod |
+| payment-service | consumer lag of its group | 1 - 4 | 25 records per pod |
+
+**CPU is honest about the first two.** Every request through the gateway costs token
+validation and stream copying, every hold costs inventory one Lua call, and in both cases a
+pod that is twice as busy is doing twice as much work. The target is 70% of the request the
+container declares, which leaves headroom for the burst that arrives while the new pod is
+starting: a JVM takes tens of seconds to be ready, so a target of 90 would be a fleet already
+saturated by the time the decision was made.
+
+What that does is turn a CPU request into a **capacity statement**, where everywhere else in
+this chart it is a scheduling floor, and inventory-service had to be given a bigger one for
+it. That pod is never idle: the sweeper runs every second, the two relays ten times a second,
+the reconciler every thirty and the sale metrics sample every five, which on a kind cluster
+with no sale running at all measures 80 millicores. Against the 200 it used to ask for, that
+is 40% of the way to the target before a single buyer has arrived, and the first rollout of
+this section had inventory-service at its ceiling of four pods while the system was doing
+nothing. Its request is 500 millicores now. The gateway's 300 needed no change, because an
+idle gateway costs 10.
+
+**An SSE pod is busy in a way CPU cannot see.** A pod of queue-service holding tens of
+thousands of waiting clients is nearly idle: what it spends is a socket and a buffer each,
+plus a position update every three seconds. CPU would therefore stay low right up
+to the point the pod ran out of memory or of file descriptors. So those two scale on
+`seatrush_sse_connections`, which is the one gauge of [§14.1](#141-metrics) that is summed
+rather than maxed, because it counts what a single pod is holding, and that is exactly what
+makes it an autoscaling signal. An HPA on a `Pods` metric divides the sum by the number of
+pods, so the thresholds above are connections per pod. Half as many for the seat map, because
+a client watching it is sent every change within the 200 ms batch window while a waiting
+client is sent its position every three seconds.
+
+Reading that gauge is what the Prometheus of [§24.4](#244-observability-in-the-cluster) is
+for. Kubernetes has no idea what `seatrush_sse_connections` is: an HPA asks the API server
+for a named metric about the pods of a Deployment, and the API server answers only if
+something is registered as the provider of `custom.metrics.k8s.io`. **prometheus-adapter** is
+that provider, and `deploy/k8s/observability/prometheus-adapter-values.yaml` is the one rule
+that turns the question into a PromQL query.
+
+**A consumer is behind in a way neither can see.** order-service and payment-service can have
+their pods idle with a hundred records waiting, because what bounds them is the partitions the
+group has been assigned and the time one record takes. The number that says so lives in the
+broker and not in the pod, which is the same reason [§14.1](#141-metrics) collects lag with an
+exporter. So those two get a **KEDA `ScaledObject`**, which is not a second kind of
+autoscaler: KEDA turns it into an HPA of its own with the lag as an external metric, and what
+it brings is the part that knows how to ask the broker. It asks directly rather than reading
+the exporter, so a pod is added without waiting for a scrape.
+
+`lagThreshold` is lag per replica, since KEDA divides the group's lag by it to get the replica
+count it wants. 50 for order-service is a figure about the deadline rather than throughput: a
+SAGA has `seatrush.checkout.timeout` to reach its pivot and a reply waiting in a partition is
+time out of it. 25 for payment-service, because the work behind one of its records is a call
+to a provider that answers in 300 ms. Twelve is the real ceiling for both and the broker is
+what enforces it, not the chart: a group with more consumers than the partitions of
+[§10.1](#101-topics) leaves the extra ones assigned nothing.
+
+An idle group does not read zero either, which is worth knowing before reading `make k8s-hpa`
+on a quiet cluster. KEDA answers a lag of 1 for every partition the group has never committed
+an offset to, instead of 0, so that a consumer which has not started yet is never scaled away;
+a group holding the twelve partitions of [§10.1](#101-topics) with two of them consumed
+reports 10 while the broker reports 0 on all twelve. Both thresholds clear that floor with
+room, and one lowered below it for a demo would be scaling on nothing.
+
+Neither one may scale to zero, which KEDA would happily do. Both services also run a
+scheduler, so a deployment with no pod is a checkout whose deadline passes with nothing to
+compensate it ([§8.3](#83-checkout-saga-orchestrated)), and the first record of a burst would
+wait for a cold JVM.
+
+An autoscaler that cannot read its trigger fails the install rather than being installed
+broken, and that is worth knowing because it is not obvious: `helm upgrade --wait` waits for
+a ScaledObject's own `Ready` condition, so a KEDA scaler that cannot reach the broker is a
+`make k8s-up` that ends in a timeout and a message naming the dial that failed. The first run
+of this section ended exactly that way, and what it had found was a real bug: the broker
+advertised itself under a bare Service name, which resolves from the release's namespace and
+not from KEDA's.
+
+**Scaling up is urgent and scaling down is not**, so the behaviour is deliberately not
+symmetric. The lobby of [§8.1](#81-lobby-waiting-room-and-admission) fills in seconds, so
+there is no stabilisation window at all on the way up and the fleet may double in fifteen of
+them. Removing a pod is never urgent and is never free: a pod of either SSE service takes its
+clients' connections with it, and every one of them reconnects and asks for a snapshot again
+([§12.2](#122-events-and-seat-map)). So the way down waits five minutes for the reading to
+hold and then moves one pod a minute.
+
+**A Deployment under an autoscaler states no replica count**, and that is not tidiness. Both
+objects are valid together, the cluster accepts them, and the next `helm upgrade` writes the
+chart's number over whatever the autoscaler had decided, which during an on-sale is a fleet
+of twelve handed back to one. Kubernetes has no merge rule that saves this; the only way for an
+autoscaler to own the field is for nothing else to set it. `scripts/check-chart.py` fails the
+build on it, because it is the mistake in this area that looks like nothing at all.
+
+**What this does to the waiting room is the one wart.** The admission job of
+[§6.2](#62-queue-service-servicesqueue-service) runs on every pod with no leader, so its rate
+and its active-user ceiling are per pod. They are therefore divided by `maxReplicas` in
+`charts/queue-service/values.yaml`: four pods admit the 500 a second and hold the 5,000 active
+users [§22](#22-configuration) documents, which are figures about a sale rather than about a
+fleet: the purchase area is bounded by seats and by the checkouts inventory can absorb. Fewer
+pods open the door more slowly rather than more quickly, which is the safe half of being wrong
+about it: a door that is too slow leaves buyers in the queue a moment longer, and one that is
+too fast puts more buyers in the purchase area than there are seats for. The honest fix is a
+rate shared in Redis the way the queue itself is, and that is a change to the service.
+
+**Everything else about this system was already written to run on more than one pod**, which
+is why the rest of the table needs no caveat: the hold sweeper and the seat reconciler are
+safe on every pod at once because the Lua scripts they call are atomic
+([§9.3](#93-hold-expiry)), both outbox relays and the SAGA scheduler take their rows with
+`FOR UPDATE SKIP LOCKED` ([§9.5](#95-transactional-outbox-postgres-and-redis)), and the gauges
+over shared state are maxed and not summed for exactly this reason
+([§14.1](#141-metrics)).
+
+**What does not scale.** The client is static files behind the Ingress and costs 10 millicores,
+so a second pod of it would be a second pod of nothing. More interesting is what a replica
+count cannot raise: Redis is one instance and the serialization point of every hold
+([§9.1](#91-two-layers-of-protection-against-overselling)), so the ceiling of inventory-service
+is that server's rather than a number in this chart. That is a property of the design, and the
+per-section sharding of [§26](#26-roadmap) is what moves it.
+
+**Seeing it move on a laptop.** The thresholds above are the ones the capacity targets of
+[§15](#15-non-functional-requirements) imply, since 200,000 queue connections is a hundred
+pods at 2,000 each, so nothing in a demo of a few hundred users will cross one. Lowering it is a
+flag rather than an edit:
+
+```bash
+helm upgrade seatrush deploy/helm/seatrush --namespace seatrush --reuse-values \
+  --set queue-service.autoscaling.podMetrics.seatrush_sse_connections=5
+make k8s-hpa
+```
+
+### 24.4 Observability in the cluster
+
+`make k8s-up` installs five things that are not part of the release, and each one answers a
+question the one above it raises:
+
+| Add-on | Why it is there |
+|--------|-----------------|
+| **metrics-server** | Where an HPA's CPU reading comes from. A managed cluster has it, kind does not, and without it an HPA on CPU reports `<unknown>` for ever. It is also what makes `kubectl top` answer. |
+| **Prometheus** | Where `seatrush_sse_connections` is collected from the pods publishing it, and where the five alert rules of [§14.4](#144-dashboards-and-alerts) fire. |
+| **kafka-exporter** | Consumer lag and dead letter depth, which no service can report about itself ([§14.1](#141-metrics)). |
+| **prometheus-adapter** | How an HPA gets to read that gauge: it serves `custom.metrics.k8s.io` and turns the question into a query. |
+| **KEDA** | What a `ScaledObject` is. It reads the broker directly and never Prometheus. |
+
+**Grafana and Tempo** come with them, because they cost one Deployment each and close the rest
+of [§14](#14-observability): the three dashboards of [§14.4](#144-dashboards-and-alerts) with
+nothing to import, and a collector that makes `global.otlpEndpoint` worth setting. That
+endpoint is named in one place, `deploy/k8s/release-observability-values.yaml`, which
+`scripts/k8s-up.sh` passes to the release when the add-ons are installed. The chart's own
+default stays empty on purpose: a service told where to export spans exports them, so an
+endpoint with nothing behind it is a stack trace every thirty seconds in six services.
+
+**None of it is in the chart, and that is the decision this part is built around.** A release
+that installed its own Prometheus would be a second Prometheus on every cluster that already
+has one, scraping the same pods into a store nobody queries, and the same goes for Grafana and
+for a metrics adapter. These are facilities of a cluster, the way the ingress controller is.
+The `infra` subchart of [§24.1](#241-the-chart) is not a counter-example but the comparison
+that makes the line clear: the services cannot run at all without Postgres, Redis and a
+broker, and they run perfectly well with nothing watching them. What does belong to the
+release is the HorizontalPodAutoscalers and the ScaledObjects, because those are statements
+about a workload.
+
+It also means `helm uninstall` takes SeatRush away and leaves what was watching it, and that a
+second release in a second namespace is scraped by the same Prometheus with nothing installed
+twice.
+
+**One copy of every configuration file.** `scripts/k8s-observability.sh` builds its ConfigMaps
+from `deploy/prometheus/alerts.yml`, `deploy/tempo/tempo.yml`, `deploy/grafana/provisioning`
+and `deploy/grafana/dashboards`, which are the same paths the Compose stack of
+[§23](#23-running-locally) mounts directly. The three dashboards are a hundred kilobytes of
+JSON, and a manifest holding a copy of them would be in step with the originals until the
+first time somebody edited one. What makes it work is one choice in the manifests: the
+Services are named `prometheus` and `tempo`, which are the hostnames those provisioned
+datasource files already carry for the Compose network.
+
+The one file this repository does have twice is the scrape config, and it is the one that
+genuinely differs. `deploy/k8s/observability/prometheus-scrape.yml` **discovers pods** rather than
+naming containers, and keeps the ones the chart annotated for scraping. That is the
+arrangement that survives autoscaling: a target list naming the six Services would scrape
+whichever pod each Service load balanced the request to, so a gauge that is per pod by
+definition would read as a sawtooth over the fleet. The scrape is also where `namespace` and
+`pod` are put on the series, because those are the two labels the custom metrics API is
+addressed by.
+
+**Where to look.**
+
+| What | How |
+|------|-----|
+| The three dashboards | `make k8s-grafana`, then http://localhost:3001 |
+| What each autoscaler reads | `make k8s-hpa` |
+| Prometheus targets and alerts | `kubectl --namespace seatrush-observability port-forward service/prometheus 9091:9090` |
+
+Grafana gets no Ingress. [§24.1](#241-the-chart) has exactly one way into the cluster and it is
+the client and the API; an operations console on the same host would be a second one, open to
+whoever can reach the port. A port-forward is the honest way to look at a cluster's own
+tooling. Port 3001 and 9091 on the host, because 3000 and 9090 belong to the Compose stack and
+both can be up at once.
+
+**What it costs and how to turn it off.** Nine pods asking for 750 millicores between them,
+on a cluster whose release asks for 1.6 cores. `SEATRUSH_OBSERVABILITY=0 make k8s-up` skips
+all of it, and the same switch turns the autoscaling off with it, because they are one
+decision: with nothing serving metrics, a release that kept its autoscalers would have four
+reporting an unknown target and two naming a CRD that is not installed.
+
+### 24.5 What the chart does not do yet
+
+Said here rather than left to be found, since M6 of [§26](#26-roadmap) arrives in three pieces
+and this is the last of them:
+
 - **Disruption and placement**: PodDisruptionBudgets and topology spread constraints for every
-  service.
+  service. They matter more now than they did before [§24.3](#243-autoscaling): a fleet that
+  scales is a fleet whose pods can all land on one node, and a voluntary eviction during an
+  on-sale is exactly what a budget is for.
 - **Graceful shutdown**: SSE connections closed with a reconnect hint, consumers committing
-  offsets and relays stopping cleanly before termination. Readiness failing while a relay or a
-  Kafka consumer is not connected is the half of the probes that needs a health contributor in
-  each service rather than a line of the chart.
+  offsets and relays stopping cleanly before termination. This is the half of the autoscaling
+  that is not in the chart: scaling down now kills pods on purpose rather than only when
+  somebody rolls a release, and what that costs today is the five-minute stabilisation window
+  of [§24.3](#243-autoscaling) rather than nothing. Readiness failing while a relay or a Kafka
+  consumer is not connected needs a health contributor in each service rather than a line of
+  the chart.
 - **NetworkPolicies**, so that only the gateway is reachable from the ingress and the
   `/internal/**` endpoints are cluster-only as a rule the cluster enforces rather than a shape
-  of the manifests.
-- **The observability of [§14](#14-observability) in the cluster.** `global.otlpEndpoint` is
-  empty, so no service exports a span: an endpoint left unset means no exporter at all, which
-  is the right answer for a cluster with nothing collecting them. Prometheus and Grafana arrive
-  with the autoscaling, because an HPA on a custom metric is the thing that has to read them.
+  of the manifests. The add-ons of [§24.4](#244-observability-in-the-cluster) are the first
+  thing outside the release that has to be let through one: a policy written today would have
+  to allow the scrape.
 
 ## 25. Architecture Decision Records
 
@@ -1428,6 +1646,8 @@ ADRs live in `docs/adr/` using the format *Context → Decision → Consequences
 | 0015 | The lobby opens on inventory's sale status, never on queue-service's own clock |
 | 0016 | Admission tokens minted on read from the slot that backs them, never stored |
 | 0017 | Infrastructure as templates of the chart instead of community charts or operators |
+| 0018 | Three autoscaling signals: CPU, SSE connections per pod, Kafka consumer lag |
+| 0019 | The observability stack as an add-on of the cluster, not a subchart of the release |
 
 ## 26. Roadmap
 
@@ -1439,7 +1659,7 @@ ADRs live in `docs/adr/` using the format *Context → Decision → Consequences
 | **M4 - Real-time** | realtime-service, snapshot/delta protocol, frontend with live map and spectator mode | Two browsers see each other's holds within 500 ms |
 | **M5 - Observability** | Domain metrics, tracing across Kafka, dashboards as code, alert rules | One checkout visible as a single trace; dashboards provisioned automatically |
 | **M6 - Kubernetes** | Helm charts, HPA, KEDA, probes, PDBs, NetworkPolicies, hooks, kind setup | `make k8s-up` deploys the full system |
-| | *In three parts: the chart, the cluster and the hooks, which is what `make k8s-up` is; then the autoscaling of HPA and KEDA with the in-cluster Prometheus it reads; then the disruption, placement, graceful shutdown and NetworkPolicies ([§24.3](#243-what-the-chart-does-not-do-yet)).* | |
+| | *In three parts: the chart, the cluster and the hooks, which is what `make k8s-up` is; then the autoscaling of HPA and KEDA with the in-cluster Prometheus it reads ([§24.3](#243-autoscaling), [§24.4](#244-observability-in-the-cluster)); then the disruption, placement, graceful shutdown and NetworkPolicies that are left ([§24.5](#245-what-the-chart-does-not-do-yet)).* | |
 | **M7 - Benchmark and chaos** | Gatling scenarios, invariant checker, chaos scripts, published results | Results table filled, invariant checker green, chaos run documented |
 | **M8 - Polish** | ADRs complete, OpenAPI and message docs, demo GIF, final README review | - |
 
