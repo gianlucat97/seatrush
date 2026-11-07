@@ -12,7 +12,8 @@ COMPOSE ?= docker compose --file $(COMPOSE_FILE) --env-file .env
 
 .DEFAULT_GOAL := help
 .PHONY: help format build test-it clean up down images seed ui ui-build
-.PHONY: k8s-up k8s-down k8s-seed k8s-status k8s-template load-small load-full check
+.PHONY: k8s-up k8s-down k8s-seed k8s-status k8s-template load-small load-full
+.PHONY: chaos check
 .PHONY: k8s-observability k8s-hpa k8s-grafana
 
 # The frontend is a Node project rather than a Maven module, so it has its own
@@ -136,6 +137,14 @@ load-small: ## 5,000-user load test followed by the invariant checker
 
 load-full: ## The benchmark of README section 18.1: 200,000 buyers, needs a cluster and an injector
 	@./scripts/load.sh full $(LOAD_FLAGS)
+
+# One experiment instead of all of them:
+#   make chaos EXPERIMENTS="kill-order stop-kafka"
+# ./scripts/chaos.sh list names them.
+EXPERIMENTS ?=
+
+chaos: ## Break the things README section 16 makes a promise about, then check the invariants
+	@./scripts/chaos.sh $(EXPERIMENTS)
 
 # Flags for the run, since every one of them has a default that fits the local stack:
 #   make check CHECK_FLAGS="--settle-timeout 0"      look at a sale that is still running
