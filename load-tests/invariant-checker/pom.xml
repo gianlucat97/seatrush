@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.seatrush</groupId>
+    <artifactId>seatrush-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>seatrush-invariant-checker</artifactId>
+
+  <name>SeatRush Invariant Checker</name>
+  <description>A standalone CLI that reads every store of a finished run and verifies the invariants of README section 4</description>
+
+  <!-- This module deliberately depends on no SeatRush module but the test support. It reads the
+       same databases and the same Redis keys the services write, and it reconstructs both from
+       README sections 9.2 and 11 rather than importing the classes that produce them. That is the
+       whole point of it: a checker built out of the service's own key names and its own row
+       mappers would agree with the service by construction, and the bug it is here to find is
+       exactly a service that writes something other than what it believes it writes. -->
+  <dependencies>
+    <!-- Three databases, read over plain JDBC. No connection pool and no ORM: this is one pass
+         of a dozen queries, and the rows it returns are compared rather than mapped. -->
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+    </dependency>
+    <!-- The same Redis client the services use, without Spring Data on top of it. The checker
+         reads hashes, sorted sets and a scan cursor, which is the synchronous API and nothing
+         more. -->
+    <dependency>
+      <groupId>io.lettuce</groupId>
+      <artifactId>lettuce-core</artifactId>
+    </dependency>
+
+    <!-- Lettuce logs through SLF4J, and with no provider on the classpath it announces that on
+         stderr three lines at a time, in front of a report somebody is reading. This discards it.
+         Nothing is lost that this tool is responsible for: its output is the report and its exit
+         code, and a Redis that cannot be reached arrives as the exception message it prints
+         itself rather than as a log line. -->
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-nop</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.assertj</groupId>
+      <artifactId>assertj-core</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- The shared Postgres and Redis containers, which is what the reader is tested against:
+         the SQL and the key names are the half of this module that a unit test cannot check. -->
+    <dependency>
+      <groupId>com.seatrush</groupId>
+      <artifactId>seatrush-test-support</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+      </plugin>
+      <!-- Repackaged into one startable jar, the same way a service is, because this is a tool
+           that runs outside the build: after a load test, in a chaos run, and in CI. The Boot
+           plugin is used here for its loader alone and not for a Spring context, since there is
+           none; what it gives is a jar with its dependencies inside, which `java -jar` runs with
+           no classpath to assemble. -->
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <configuration>
+          <mainClass>com.seatrush.invariants.InvariantChecker</mainClass>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

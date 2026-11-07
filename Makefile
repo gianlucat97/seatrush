@@ -126,7 +126,13 @@ k8s-grafana: ## Open the dashboards of the cluster on http://localhost:3001
 	@$(KUBECTL_OBSERVABILITY) port-forward service/grafana 3001:3000
 
 load-small: ## 5,000-user load test followed by the invariant checker
-	@echo "make load-small arrives with the benchmark suite (M7)."; exit 1
+	@echo "make load-small arrives with the Gatling scenarios (M7); make check is here."; exit 1
 
-check: ## Run the invariant checker alone
-	@echo "make check arrives with the benchmark suite (M7)."; exit 1
+# Flags for the run, since every one of them has a default that fits the local stack:
+#   make check CHECK_FLAGS="--settle-timeout 0"      look at a sale that is still running
+#   make check CHECK_FLAGS="--event <uuid>"          one event of a catalog with several
+# ./scripts/check.sh --help lists them all.
+CHECK_FLAGS ?=
+
+check: ## Verify the invariants of README section 4 against the running stack
+	@./scripts/check.sh $(CHECK_FLAGS)
