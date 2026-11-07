@@ -51,3 +51,10 @@ keda:
   topics:
     - inventory.replies
     - payment.replies
+
+# Who may reach this service (README section 24.7). Only the gateway: a checkout is started by
+# a buyer and advanced by replies on a topic, so nothing else in the release has a reason to
+# call it. The `/internal/**` endpoints of section 12.7 are inventory's, not this service's.
+networkPolicy:
+  allowFrom:
+    - gateway

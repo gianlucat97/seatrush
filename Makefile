@@ -101,7 +101,10 @@ k8s-seed: ## Create a demo event in the cluster, on-sale in 2 minutes
 	@SEATRUSH_API_URL=$(K8S_URL) SEATRUSH_UI_URL=$(K8S_URL) ./scripts/seed.sh
 
 k8s-status: ## What is running in the cluster
-	@$(KUBECTL) get pods,svc,ingress --selector app.kubernetes.io/part-of=seatrush
+	# The budgets and the policies of README sections 24.5 and 24.7 are listed here too,
+	# because they are the two objects nothing else in this file would show and the two whose
+	# absence looks exactly like their presence.
+	@$(KUBECTL) get pods,svc,ingress,pdb,networkpolicy --selector app.kubernetes.io/part-of=seatrush
 
 k8s-template: ## Render the chart without a cluster, which is what CI validates
 	helm template $(K8S_RELEASE) $(HELM_CHART)

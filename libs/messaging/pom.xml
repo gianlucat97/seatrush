@@ -77,6 +77,14 @@
       <artifactId>micrometer-core</artifactId>
       <optional>true</optional>
     </dependency>
+    <!-- The readiness contributors of README section 24.6. Health moved out of the actuator
+         into its own module in Boot 4, which is the one this needs: the contributors here
+         report on a relay and on listener containers and touch no endpoint. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-health</artifactId>
+      <optional>true</optional>
+    </dependency>
     <!-- The bounds on the relay properties. -->
     <dependency>
       <groupId>jakarta.validation</groupId>

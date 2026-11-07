@@ -45,10 +45,12 @@ class RealtimeConfigurationTest {
 
   @Test
   void refusesAStreamThatIsNeverKeptAliveOrNeverEnded() {
-    assertThatThrownBy(() -> new SseProperties(Duration.ZERO, Duration.ofMinutes(30)))
+    assertThatThrownBy(
+            () -> new SseProperties(Duration.ZERO, Duration.ofMinutes(30), Duration.ofSeconds(2)))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("heartbeat-interval");
-    assertThatThrownBy(() -> new SseProperties(Duration.ofSeconds(15), Duration.ZERO))
+    assertThatThrownBy(
+            () -> new SseProperties(Duration.ofSeconds(15), Duration.ZERO, Duration.ofSeconds(2)))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("timeout");
   }

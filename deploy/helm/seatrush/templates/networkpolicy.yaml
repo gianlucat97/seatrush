@@ -1,0 +1,34 @@
+{{- if .Values.global.networkPolicy.enabled }}
+{{/*
+The rule everything else in README section 24.7 is an exception to.
+
+A NetworkPolicy is additive: a pod with none is open to the cluster, and a pod with one accepts
+what its policies allow and nothing else. So the per-service policies alone would secure the
+six services and leave anything added later open by accident, which is the opposite of what a
+rule is for. This one selects every pod in the namespace and allows nothing, and every policy
+beside it is then a named permission on top.
+
+It is also what makes the arrangement of section 13 true rather than merely arranged. A service
+behind the gateway trusts the `X-User-Id` it is handed because only the gateway can set one, and
+with this applied that is enforced by the API server rather than by the fact that nobody has yet
+pointed anything else at it.
+
+Ingress only, for the reason charts/seatrush-lib/templates/_networkpolicy.tpl gives: egress is a
+different threat with a different answer, and a deny-all egress here would need a peer for DNS,
+for three stores, for a collector in another namespace and for the ingress controller's probes.
+
+The namespace of the release and not the cluster: a policy is a namespaced object, so this says
+nothing about anybody else's pods, and that is why `helm uninstall` takes it away cleanly.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "seatrush.release" . }}-deny-ingress
+  labels:
+    {{- include "seatrush.component.labels" (dict "context" . "name" "deny-ingress" "component" "policy") | nindent 4 }}
+spec:
+  # Every pod in the namespace, including the ones this chart does not know about.
+  podSelector: {}
+  policyTypes:
+    - Ingress
+{{- end }}

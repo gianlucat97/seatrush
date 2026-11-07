@@ -815,7 +815,7 @@ All endpoints are served through the gateway under `/api`. Errors follow **RFC 9
 - **Rate limiting**: token bucket per user and per IP on queue join, holds and orders.
 - **Anti-hoarding**: one active hold per user per event, max seats per hold.
 - **Signed tickets**: ticket payload (`ticketId, eventId, seatId, issuedAt`) signed with Ed25519 by order-service, verifiable offline at the venue entrance.
-- **Internal endpoints** reachable only inside the cluster (Kubernetes NetworkPolicy).
+- **Internal endpoints** reachable only inside the cluster, as a rule the API server enforces and not only as a shape of the deployment ([§24.7](#247-networkpolicies)).
 - **Secrets** via Kubernetes Secrets, never committed; `.env.example` for local development.
 - **Input limits**: max seats per hold, max request body size, strict Bean Validation on every DTO.
 
@@ -945,6 +945,8 @@ There is no Alertmanager in the local stack. A firing rule is visible under **Al
 | Late `PaymentAuthorized` after timeout | `VoidPayment` sent again; no captured payment for a failed order. |
 | Capture fails after seats committed | Retried with backoff; order stays `SEATS_COMMITTED`; alert fires if retries are exhausted. |
 | realtime pod dies | Clients reconnect (SSE `retry`), reload the snapshot, continue with deltas. |
+| A pod is removed on purpose (rollout, scale-down, drain) | It keeps serving through the pre-stop pause while its callers' endpoint caches catch up, hands every SSE stream back with a jittered retry hint, finishes the record and the relay pass in hand, and then exits ([§24.6](#246-graceful-shutdown)). |
+| A pod's relay stops passing, or a listener container stops running | Its readiness probe fails, so it leaves its Service and the rollout stops; the other pods carry the work and nothing kills it, because a restart would replace it with a pod in the same state ([§24.6](#246-graceful-shutdown)). |
 | queue pod dies | Queue state is in Redis; clients reconnect and are told the same thing by any pod; the admission job runs on every pod with no leader and no lock, because `ZPOPMIN` claims a buyer for exactly one caller ([§6.2](#62-queue-service-servicesqueue-service)). |
 | Poison message | Retries, then DLQ; alert fires. |
 
@@ -1184,6 +1186,7 @@ Main properties (all overridable via environment variables):
 | `seatrush.inventory.read-timeout` | order | `3s` | Read timeout of the freeze call, kept below the checkout deadline |
 | `seatrush.outbox.poll-interval` | all | `100ms` | Postgres outbox relay period |
 | `seatrush.outbox.batch-size` | all | `500` | Rows per relay batch |
+| `seatrush.outbox.stale-after` | all | `30s` | How long without a completed relay pass fails this pod's readiness probe ([§24.6](#246-graceful-shutdown)). Two orders of magnitude above the poll interval, because it catches a scheduler that died and never a broker that is briefly away |
 | `seatrush.consumer.retries` | all | `3` | Redeliveries of a record before the DLQ |
 | `seatrush.consumer.retry-backoff` | all | `500ms` | Pause before the first redelivery |
 | `seatrush.consumer.retry-max-backoff` | all | `5s` | Ceiling the redelivery pause doubles up to |
@@ -1193,6 +1196,7 @@ Main properties (all overridable via environment variables):
 | `seatrush.stream-relay.poll-interval` | inventory | `100ms` | Seat event relay period |
 | `seatrush.stream-relay.batch-size` | inventory | `500` | Stream entries per relay pass |
 | `seatrush.stream-relay.claim-idle-after` | inventory | `30s` | Pending entries are claimed from a dead consumer after this |
+| `seatrush.stream-relay.stale-after` | inventory | `30s` | The same readiness bound as the outbox relay's, for the other relay this service runs ([§24.6](#246-graceful-shutdown)) |
 | `seatrush.realtime.batch-window` | realtime | `200ms` | Delta batching window |
 | `seatrush.sse.heartbeat-interval` | queue, realtime | `15s` | SSE keep-alive comment |
 | `management.tracing.sampling.probability` | gateway | `1.0` | Share of requests that start a trace, which is every trace in the system ([§14.2](#142-tracing)); `SEATRUSH_TRACING_SAMPLE_RATE` |
@@ -1200,6 +1204,9 @@ Main properties (all overridable via environment variables):
 | `management.opentelemetry.tracing.export.otlp.endpoint` | all | `http://localhost:4318/v1/traces` | Where spans are exported; `SEATRUSH_OTLP_ENDPOINT` |
 | `management.tracing.export.enabled` | all | `true` | The switch that turns the export off. It is this and not an empty endpoint: the autoconfiguration is conditional on that property being present, and the default above makes it always present, so a deployment with nothing collecting spans would export at its own loopback and log it every thirty seconds. Set `false` by the chart of [§24](#24-deployment-on-kubernetes) when no endpoint is given |
 | `seatrush.sse.timeout` | queue, realtime | `30m` | How long one SSE stream may stay open before the client is asked to reconnect |
+| `seatrush.sse.shutdown-reconnect-delay` | queue, realtime | `2s` | The shortest a client waits before reconnecting after this pod closed its stream on purpose. Jittered per client over twice it, so a pod's clients do not all return in the same instant ([§24.6](#246-graceful-shutdown)) |
+| `spring.lifecycle.timeout-per-shutdown-phase` | all | `10s` | How long one shutdown phase may take. It bounds the gateway in particular, where a proxied SSE exchange never completes on its own ([§24.6](#246-graceful-shutdown)) |
+| `spring.task.scheduling.shutdown.await-termination` | the five with schedulers | `true` | Whether a relay pass that is running may finish before the process exits. Boot defaults it to `false`, which cuts a pass off mid-publish |
 | `seatrush.payment.decline-rate` | payment | `0.05` | Simulated decline rate |
 | `seatrush.payment.latency-p50` | payment | `300ms` | Simulated latency median |
 | `seatrush.payment.latency-p99` | payment | `1500ms` | Simulated latency tail |
@@ -1601,27 +1608,183 @@ all of it, and the same switch turns the autoscaling off with it, because they a
 decision: with nothing serving metrics, a release that kept its autoscalers would have four
 reporting an unknown target and two naming a CRD that is not installed.
 
-### 24.5 What the chart does not do yet
+### 24.5 Disruption and placement
 
-Said here rather than left to be found, since M6 of [§26](#26-roadmap) arrives in three pieces
-and this is the last of them:
+Two objects with one subject, and neither could say anything true before
+[§24.3](#243-autoscaling): a budget over a single replica is a statement nothing can satisfy,
+and a spread constraint over a single pod is one that is always met.
 
-- **Disruption and placement**: PodDisruptionBudgets and topology spread constraints for every
-  service. They matter more now than they did before [§24.3](#243-autoscaling): a fleet that
-  scales is a fleet whose pods can all land on one node, and a voluntary eviction during an
-  on-sale is exactly what a budget is for.
-- **Graceful shutdown**: SSE connections closed with a reconnect hint, consumers committing
-  offsets and relays stopping cleanly before termination. This is the half of the autoscaling
-  that is not in the chart: scaling down now kills pods on purpose rather than only when
-  somebody rolls a release, and what that costs today is the five-minute stabilisation window
-  of [§24.3](#243-autoscaling) rather than nothing. Readiness failing while a relay or a Kafka
-  consumer is not connected needs a health contributor in each service rather than a line of
-  the chart.
-- **NetworkPolicies**, so that only the gateway is reachable from the ingress and the
-  `/internal/**` endpoints are cluster-only as a rule the cluster enforces rather than a shape
-  of the manifests. The add-ons of [§24.4](#244-observability-in-the-cluster) are the first
-  thing outside the release that has to be let through one: a policy written today would have
-  to allow the scrape.
+**A PodDisruptionBudget per service, written as `maxUnavailable: 1`.** It governs voluntary
+disruption and nothing else, which is the half worth protecting: a node drained for an upgrade,
+a cluster autoscaler consolidating, somebody running `kubectl drain` during an on-sale. A node
+that dies takes its pods either way, and so does the autoscaler scaling down, because neither is
+an eviction.
+
+`minAvailable` is the trap and the reason the budget is written the other way round. Every
+service here scales from one, and `minAvailable: 1` against a single replica is a pod the API
+server refuses to evict for ever: the drain hangs, the node never cordons, and the reason is
+three levels inside `kubectl describe pdb`. `maxUnavailable: 1` says the useful half of the same
+thing, which is that a fleet of four loses one pod at a time, and it still lets a single-replica
+service be moved off a node. One and never a percentage, because 25% of four pods is one and 25%
+of two is zero, so a percentage would quietly become the undrainable case at the replica count
+the fleet sits at most of the time. `unhealthyPodEvictionPolicy: AlwaysAllow`, because a pod
+whose readiness has failed for the reasons of [§24.6](#246-graceful-shutdown) is one nobody wants
+protected from being moved.
+
+The stores get no budget at all. Postgres, Redis and the broker are single instances, so a budget
+over one of them either refuses every drain or permits it, and the restart-with-data-loss path of
+[§16](#16-failure-modes) is a behaviour this system is built to survive rather than one to stand
+in the way of.
+
+**A topology spread constraint per service, `maxSkew: 1` over hostnames.** Four pods of the
+gateway on one node are four pods one kubelet restart takes away, and that is the case a
+disruption budget cannot help with, because a node that goes is not a node that drains.
+
+`ScheduleAnyway` and deliberately not `DoNotSchedule`, which is the arithmetic of the cluster this
+runs on: [§24.2](#242-the-local-cluster) has two workers and the autoscaling goes to four pods, so
+a requirement would leave the third and fourth `Pending` for ever. An autoscaler whose pods cannot
+be placed does nothing at the moment it is needed, and a preference gets the spread whenever the
+cluster can give it. `matchLabelKeys` with the pod template hash, so the skew is measured within
+one revision rather than against the pods of the previous one that are still terminating.
+
+### 24.6 Graceful shutdown
+
+A pod of this system now goes away on purpose, which it did not before
+[§24.3](#243-autoscaling): a rollout was the only thing that removed one, and a scale-down removes
+one whenever the fleet is larger than the load needs. So what a pod does on its way out stopped
+being a detail.
+
+**The pre-stop pause, which is the part that has nothing to do with the process.** A pod's
+removal from its Service endpoints and the signal to its container happen at once, in two
+controllers that do not wait for each other. A pod that stopped listening the moment it was
+signalled would still be receiving requests from the ingress controller and from its neighbours
+for as long as their endpoint caches took to catch up: a handful of `502`s per rollout that
+nobody can reproduce afterwards. The chart therefore sleeps 5 seconds in a `preStop` hook, during
+which the process keeps serving normally while the removal propagates. Nothing waits for that
+sleep which was not already waiting.
+
+**What each process then does with the time it has.** `server.shutdown` is not set anywhere,
+because graceful is already the default in Spring Boot 4; what the services add is the work that
+default cannot do on its own.
+
+| Service | On the way out |
+|---------|----------------|
+| queue-service, realtime-service | Every SSE stream is completed with a jittered retry hint, before the web server begins to drain |
+| order-service, payment-service, inventory-service | The Kafka listener containers finish the record in hand and commit where they got to; the relays finish the pass they are in |
+| gateway | The reactive server stops accepting and drains what it is proxying, bounded by the phase timeout |
+
+**The streams are closed first, and the ordering is the point.** An SSE exchange does not finish
+by itself, so a graceful shutdown that simply waited for in-flight requests would wait out its
+whole grace period on connections that have no reason to end, and then cut them anyway. Both
+streaming services close theirs on `ContextClosedEvent`, which Spring publishes before the web
+server's own shutdown phase begins, so the streams end while the container can still write to
+them. What goes out last on each one is a `retry:` hint and a comment saying why.
+
+That hint is **jittered per client over [2s, 4s)**, and the jitter is the whole reason it exists.
+An `EventSource` reconnects by itself; what it must not do is reconnect at the browser's default
+all at once, because a pod holding ten thousand clients would hand the pods that remain ten
+thousand reconnections in the same instant, each one a snapshot to build, exactly when one of
+their neighbours has just gone. Nobody loses anything by the close itself: a waiting client is
+told the same position by any pod, because the queue is in Redis, and a watching client reloads a
+seat map that lives in inventory.
+
+The gateway is where that costs the most and can be helped the least: it proxies both streams, and
+a proxied stream is an exchange that never completes. `spring.lifecycle.timeout-per-shutdown-phase`
+is what stops it waiting, and the arithmetic behind that number is deliberate: 45 seconds of
+termination grace, 5 of them spent in the pre-stop hook, 10 per shutdown phase and 10 for a relay
+pass to finish, which leaves the last 10 as margin before the kubelet stops asking.
+
+**Readiness says what this pod has in place, and never what the cluster is doing.** This is the
+half of the probes [§24.1](#241-the-chart) left open, and the rule it is built on is the one
+sentence worth taking away from this section. Each service's readiness group names the
+contributors it actually has:
+
+| Contributor | Down when | Service |
+|-------------|-----------|---------|
+| `kafkaListeners` | A listener container is not running | all five consumers |
+| `outboxRelay` | No pass of the Postgres outbox relay has completed for 30s | inventory, order, payment |
+| `streamRelay` | No pass of the Redis stream relay has completed for 30s | inventory |
+
+Each one is a failure that otherwise shows up as nothing at all. A pod whose listener container is
+not running answers HTTP perfectly and consumes no records, and because another pod of the group
+takes them, the queue drains and the dashboards look ordinary: the only symptom is a fleet doing
+the work of one pod fewer. During a rolling update it is worse, because that pod would be declared
+ready and the rollout would carry on replacing the pods that were working.
+
+**And what is deliberately not in those groups**: the database, Redis and the broker, every one of
+which Boot would contribute a health indicator for. A readiness probe on a shared store is a fleet
+that removes itself: one slow Postgres and all four pods of three services leave their Services in
+the same instant, which turns a store having a bad minute into a `503` for every buyer holding a
+seat. A store that is down belongs on the dashboards and in the alert rules of
+[§14.4](#144-dashboards-and-alerts), where a person decides what to do about it. The same argument
+decides the two Kafka cases: a container that is running but has been assigned no partition is a
+correct member of an over-provisioned group and not a broken pod, and a container whose broker has
+gone keeps running and retrying, which is exactly what this probe wants it to do.
+
+None of this is in liveness either. Readiness takes a pod out of its Service and stops a rollout;
+liveness kills it, and a pod killed during an on-sale costs whatever it was holding. A relay that
+has stopped passing is not transient, so a probe that killed on it would replace a pod that
+publishes nothing with a pod that publishes nothing, five times over, and then back off for five
+minutes.
+
+### 24.7 NetworkPolicies
+
+Every service behind the gateway already answers only to callers inside the cluster, because
+nothing outside has a route to one: the Ingress of [§24.1](#241-the-chart) names two paths and
+neither is a service. What that is not is a rule. It is a shape, and [§13](#13-security) rests on
+it, since a service trusts the `X-User-Id` it is handed because only the gateway can set one. That
+holds exactly as long as nobody adds a second Ingress, a second LoadBalancer, or a port-forward in
+a script. These policies are the same arrangement written where the API server reads it.
+
+**A deny-all that selects every pod in the namespace**, and every other policy is a named
+permission on top of it. A NetworkPolicy is additive: a pod with none is open to the cluster and a
+pod with one accepts what its policies allow and nothing else, so the per-service policies alone
+would secure the six services and leave the seventh open by accident.
+
+| Target | May be reached by |
+|--------|-------------------|
+| gateway, seat-map-ui | the ingress controller's namespace |
+| inventory-service | gateway, order-service (the freeze of [§12.7](#127-internal-endpoints-not-exposed-by-the-gateway)), queue-service (the catalog, ADR-0015) |
+| order-service, queue-service, realtime-service | gateway |
+| payment-service | nothing at all |
+| every service | the `seatrush-observability` namespace, for the scrape of [§24.4](#244-observability-in-the-cluster) |
+| Postgres | the three services that own a database ([§11](#11-data-storage)) |
+| Redis | inventory-service, queue-service |
+| the broker | all five services, the topics Job, itself, and two namespaces |
+
+Four of those rows are worth a sentence. **payment-service is reachable by nothing**, which is a
+sharper statement than any list: it is driven entirely by `payment.commands` and answers on
+`payment.replies`, so it has no caller to allow. **The broker is in its own list**, because a
+single node in KRaft mode is its own controller quorum and connects to itself through the headless
+Service, which under a deny-all is ingress from a pod that happens to be itself. **Two namespaces
+reach the broker** and neither is part of the release: the Kafka exporter of
+[§24.4](#244-observability-in-the-cluster) and the KEDA operator of [§24.3](#243-autoscaling),
+which asks it for consumer group lag. And the **scrape** is the one permission every pod needs
+from outside, because a pod no Prometheus can reach is a pod whose SSE connections no autoscaler
+can read.
+
+Namespaces are matched on `kubernetes.io/metadata.name`, which the API server sets on every
+namespace, so none of this needs a label of anybody else's chart.
+
+**Ingress only, and that is a decision rather than a half-finished job.** Egress rules answer a
+different question: not who may call a service, but where a compromised pod may call out to.
+Answering it needs a peer for DNS, for each of the three stores, for the collector in another
+namespace and for whatever a JVM resolves at startup, and a list that long gets a hole punched in
+it the first time something breaks at three in the morning. [§13](#13-security) is about the first
+question, so that is the one these policies answer.
+
+**A policy is only worth what the CNI enforces.** The kindnet of
+[§24.2](#242-the-local-cluster) does implement NetworkPolicy, which is what makes
+`make k8s-up` a cluster these rules are actually tested on rather than one that accepts and
+ignores them. That is not true of every CNI, and a cluster whose network plugin ignores policies
+is one where these objects read as protection and provide none, so
+`global.networkPolicy.enabled=false` is the honest setting for it.
+
+`scripts/check-chart.py` compares the policies against the calls the chart configures, which is
+the one failure here that is silent in both directions: the gateway is told where queue-service
+answers in one values file, queue-service says who may call it in another, and a release where
+those two disagree renders cleanly, installs cleanly, and times out the first time anybody joins a
+queue.
 
 ## 25. Architecture Decision Records
 
@@ -1648,6 +1811,7 @@ ADRs live in `docs/adr/` using the format *Context → Decision → Consequences
 | 0017 | Infrastructure as templates of the chart instead of community charts or operators |
 | 0018 | Three autoscaling signals: CPU, SSE connections per pod, Kafka consumer lag |
 | 0019 | The observability stack as an add-on of the cluster, not a subchart of the release |
+| 0020 | Readiness on this pod's own machinery, never on a shared store |
 
 ## 26. Roadmap
 
@@ -1659,7 +1823,7 @@ ADRs live in `docs/adr/` using the format *Context → Decision → Consequences
 | **M4 - Real-time** | realtime-service, snapshot/delta protocol, frontend with live map and spectator mode | Two browsers see each other's holds within 500 ms |
 | **M5 - Observability** | Domain metrics, tracing across Kafka, dashboards as code, alert rules | One checkout visible as a single trace; dashboards provisioned automatically |
 | **M6 - Kubernetes** | Helm charts, HPA, KEDA, probes, PDBs, NetworkPolicies, hooks, kind setup | `make k8s-up` deploys the full system |
-| | *In three parts: the chart, the cluster and the hooks, which is what `make k8s-up` is; then the autoscaling of HPA and KEDA with the in-cluster Prometheus it reads ([§24.3](#243-autoscaling), [§24.4](#244-observability-in-the-cluster)); then the disruption, placement, graceful shutdown and NetworkPolicies that are left ([§24.5](#245-what-the-chart-does-not-do-yet)).* | |
+| | *Arrived in three parts: the chart, the cluster and the hooks, which is what `make k8s-up` is ([§24.1](#241-the-chart), [§24.2](#242-the-local-cluster)); then the autoscaling of HPA and KEDA with the in-cluster Prometheus it reads ([§24.3](#243-autoscaling), [§24.4](#244-observability-in-the-cluster)); then the disruption, placement, graceful shutdown and NetworkPolicies ([§24.5](#245-disruption-and-placement), [§24.6](#246-graceful-shutdown), [§24.7](#247-networkpolicies)).* | |
 | **M7 - Benchmark and chaos** | Gatling scenarios, invariant checker, chaos scripts, published results | Results table filled, invariant checker green, chaos run documented |
 | **M8 - Polish** | ADRs complete, OpenAPI and message docs, demo GIF, final README review | - |
 

@@ -182,6 +182,57 @@ global:
             value: 1
             periodSeconds: 60
 
+  # The seconds between a pod being told to go and the process being told (README section
+  # 24.6). Not a graceful shutdown setting, which is the service's own business: this covers
+  # the window where a pod has been removed from its Service endpoints by one controller and
+  # signalled by another, with neither waiting for the other, during which the ingress
+  # controller and its neighbours are still sending it requests from caches that have not
+  # caught up. Five seconds is what that propagation takes on a cluster this size.
+  #
+  # It is spent in a pre-stop hook, so nothing is waiting for it that was not already waiting,
+  # and it comes out of the termination grace period rather than being added to it.
+  terminationDelay: 5
+
+  # What may take a pod away, and where pods are allowed to be (README section 24.5). Both
+  # arrive with the autoscaling, because neither could say anything true before it: a budget
+  # over a single replica is a statement nothing can satisfy, and a spread over a single pod
+  # is one that is always met.
+  disruption:
+    enabled: true
+    # One at a time, and never `minAvailable`: every service here scales from one, and
+    # `minAvailable: 1` against a single replica is a pod the API server refuses to evict for
+    # ever, so a node drain hangs with the reason three levels inside `kubectl describe pdb`
+    # (charts/seatrush-lib/templates/_disruption.tpl).
+    maxUnavailable: 1
+
+  placement:
+    spread:
+      enabled: true
+      maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      # A preference and not a requirement, which is the arithmetic of the cluster this runs
+      # on: two workers, and an autoscaler that goes to four pods. `DoNotSchedule` would leave
+      # the third and the fourth Pending for ever, which is an autoscaler that does nothing at
+      # the moment it is needed. A real cluster with a node per zone can afford the stricter
+      # one.
+      whenUnsatisfiable: ScheduleAnyway
+
+  # Who may reach a pod of this release, as a rule the API server enforces rather than a shape
+  # of the manifests (README section 24.7). Off is for a cluster whose CNI does not implement
+  # NetworkPolicy, where these objects would be accepted, ignored and mistaken for protection.
+  networkPolicy:
+    enabled: true
+    # The two namespaces outside this release that have to reach into it: the ingress
+    # controller, for the gateway and the client, and the Prometheus of section 24.4, for every
+    # pod that publishes meters. Both are matched on `kubernetes.io/metadata.name`, which the
+    # API server sets on every namespace, so neither needs a label of its own.
+    ingressNamespace: ingress-nginx
+    observabilityNamespace: seatrush-observability
+    # The broker is asked for consumer group lag by KEDA, which runs in its own namespace
+    # (section 24.3). Nothing else of the autoscaling reaches into the release: an HPA reads
+    # the metrics API and never a pod.
+    kedaNamespace: keda
+
   # Whether the ScaledObjects of order-service and payment-service are rendered at all.
   #
   # Separate from the switch above because it is a different question: that one is whether

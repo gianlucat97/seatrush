@@ -88,6 +88,21 @@ seatrush:
     poll-interval: ${SEATRUSH_OUTBOX_POLL_INTERVAL:100ms}
     batch-size: ${SEATRUSH_OUTBOX_BATCH_SIZE:500}
 
+# How long this process is allowed to take to stop, and it is arithmetic rather than a
+# preference (README section 24.6). The chart gives a pod 45 seconds and sleeps 5 of them
+# before the signal, so what is left for the process is 40: at most 10 for the web server to
+# finish what it is serving, 10 for the Kafka containers to commit where they got to, and 10
+# for a relay pass to finish, which leaves the last 10 as the margin before the kubelet stops
+# asking.
+#
+# `server.shutdown` is not set here, because graceful is already the default in Boot 4. What
+# that means for the two streaming services is only a bound: an SSE exchange does not finish
+# on its own, so they close their streams on the context closing and the timeout below is
+# what covers whatever is left (see QueueStreams and SeatMapStreams).
+spring.lifecycle.timeout-per-shutdown-phase: 10s
+spring.task.scheduling.shutdown.await-termination: true
+spring.task.scheduling.shutdown.await-termination-period: 10s
+
 server:
   port: ${SERVER_PORT:8082}
 
@@ -104,6 +119,17 @@ management:
     health:
       probes:
         enabled: true
+      group:
+        readiness:
+        # What this pod has to have in place to be sent a request (README section 24.6):
+        # the Spring readiness state, the outbox relay still completing passes, and the reply
+        # listeners running. A SAGA is advanced by a reply, so a pod consuming nothing is a pod
+        # that starts checkouts it cannot finish.
+        #
+        # Not the database, which Boot would contribute: a Postgres blip would take every pod
+        # of every service out of its Service at once, and a store that is down belongs on a
+        # dashboard rather than in a probe (section 14.4).
+          include: readinessState,outboxRelay,kafkaListeners
   tracing:
     sampling:
       # No roots. The sampler is parent based, so zero does not mean "no traces": it means this

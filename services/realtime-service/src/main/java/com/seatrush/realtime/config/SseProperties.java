@@ -23,18 +23,30 @@ import org.springframework.validation.annotation.Validated;
  * gives the same two knobs to the waiting room stream of queue-service: one answer to the question
  * of how this system treats an idle stream, rather than one answer per service.
  *
+ * <p>{@code shutdownReconnectDelay} is what a stream is told on its way out (README section 24.6).
+ * A pod that is going away completes every stream it holds, and an EventSource reconnects by
+ * itself; what it must not do is reconnect at the browser's default of three seconds all at once,
+ * because a pod holding ten thousand clients would hand the pods that remain ten thousand
+ * reconnections in the same instant, each one a fresh snapshot to build. So the delay is sent as a
+ * retry hint and it is jittered per client, over a window of twice this, which spreads the return
+ * instead of timing it.
+ *
  * @param heartbeatInterval how long a listener may hear nothing before a keep-alive is sent
  * @param timeout how long one stream may stay open before the client is asked to reconnect
+ * @param shutdownReconnectDelay the shortest a client waits before reconnecting after this pod has
+ *     closed its stream on purpose
  */
 @Validated
 @ConfigurationProperties(prefix = "seatrush.sse")
 public record SseProperties(
     @NotNull @DefaultValue("15s") Duration heartbeatInterval,
-    @NotNull @DefaultValue("30m") Duration timeout) {
+    @NotNull @DefaultValue("30m") Duration timeout,
+    @NotNull @DefaultValue("2s") Duration shutdownReconnectDelay) {
 
   public SseProperties {
     requirePositive(heartbeatInterval, "heartbeat-interval");
     requirePositive(timeout, "timeout");
+    requirePositive(shutdownReconnectDelay, "shutdown-reconnect-delay");
   }
 
   private static void requirePositive(Duration value, String name) {

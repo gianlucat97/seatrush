@@ -95,6 +95,21 @@ seatrush:
     # Long enough that a slow publish is not stolen from a relay still working on it.
     claim-idle-after: ${SEATRUSH_STREAM_RELAY_CLAIM_IDLE_AFTER:30s}
 
+# How long this process is allowed to take to stop, and it is arithmetic rather than a
+# preference (README section 24.6). The chart gives a pod 45 seconds and sleeps 5 of them
+# before the signal, so what is left for the process is 40: at most 10 for the web server to
+# finish what it is serving, 10 for the Kafka containers to commit where they got to, and 10
+# for a relay pass to finish, which leaves the last 10 as the margin before the kubelet stops
+# asking.
+#
+# `server.shutdown` is not set here, because graceful is already the default in Boot 4. What
+# that means for the two streaming services is only a bound: an SSE exchange does not finish
+# on its own, so they close their streams on the context closing and the timeout below is
+# what covers whatever is left (see QueueStreams and SeatMapStreams).
+spring.lifecycle.timeout-per-shutdown-phase: 10s
+spring.task.scheduling.shutdown.await-termination: true
+spring.task.scheduling.shutdown.await-termination-period: 10s
+
 server:
   port: ${SERVER_PORT:8081}
 
@@ -111,6 +126,22 @@ management:
     health:
       probes:
         enabled: true
+      group:
+        readiness:
+        # What this pod has to have in place to be sent a request (README section 24.6).
+        # Four names and every one of them is a fact about this pod: the Spring readiness
+        # state, the two relays still completing passes, and the listener containers running.
+        #
+        # Deliberately not the database and not Redis, which Boot would contribute happily.
+        # Every hold this service answers needs both, so a probe that failed on them would be
+        # right about this pod and catastrophic about the fleet: one Redis blip and all four
+        # pods leave the Service at the same instant, which turns a slow store into a 503 for
+        # every buyer. A store that is down is a page on a dashboard (section 14.4), not a
+        # fleet that removes itself.
+        #
+        # Membership is validated at startup, so a name that is not a contributor here is a
+        # service that refuses to start rather than a probe quietly checking less.
+          include: readinessState,outboxRelay,streamRelay,kafkaListeners
   tracing:
     sampling:
       # No roots. The sampler is parent based, so zero does not mean "no traces": it means this

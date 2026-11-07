@@ -40,3 +40,9 @@ autoscaling:
   maxReplicas: 4
   podMetrics:
     seatrush_sse_connections: 1000
+
+# Who may reach this service (README section 24.7): the gateway, which proxies the one path of
+# section 12.2 that is routed here rather than to inventory.
+networkPolicy:
+  allowFrom:
+    - gateway

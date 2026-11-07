@@ -51,3 +51,9 @@ autoscaling:
   minReplicas: 1
   maxReplicas: 4
   targetCPUUtilizationPercentage: 70
+
+# Who may reach this service (README section 24.7): the ingress controller, and nothing else.
+# Nothing inside the cluster calls the gateway, which is the shape of section 6.1 read from the
+# other direction, and the policy is where that becomes a rule rather than an arrangement.
+networkPolicy:
+  allowFromIngressController: true
