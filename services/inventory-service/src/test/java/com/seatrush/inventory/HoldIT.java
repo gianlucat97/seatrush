@@ -55,6 +55,10 @@ import org.testcontainers.junit.jupiter.EnabledIfDockerAvailable;
       // The sweeper is driven by hand here, so the scheduled one is pushed out of the way: a
       // sweep firing between moving the clock and asserting would make the result a race.
       "seatrush.hold.sweeper-interval=1h",
+      // And the sale opener, for the same reason: every event here is created with its sale
+      // already due, so a pass would open it between the fixture and the assertion and the
+      // lifecycle this test drives by hand would be driven by two things at once.
+      "seatrush.sale-opener.interval=1h",
       "seatrush.stream-relay.poll-interval=1h"
     })
 @EnabledIfDockerAvailable

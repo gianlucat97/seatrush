@@ -28,6 +28,7 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.testcontainers.junit.jupiter.EnabledIfDockerAvailable;
@@ -41,6 +42,13 @@ import org.testcontainers.junit.jupiter.EnabledIfDockerAvailable;
  */
 @SpringBootTest
 @AutoConfigureMockMvc
+@TestPropertySource(
+    properties = {
+      // The sale opener is driven by hand here, so the scheduled one is pushed out of the way:
+      // every event this test creates has its sale already due, and a pass firing between the
+      // fixture and the assertion would move a lifecycle this test is the only author of.
+      "seatrush.sale-opener.interval=1h"
+    })
 @EnabledIfDockerAvailable
 class CatalogIT {
 

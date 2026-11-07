@@ -299,10 +299,12 @@ public class OnSaleSimulation extends Simulation {
    * to notice. This way the lobby fills, one request opens the sale, and the rush arrives, all on
    * one timeline.
    *
-   * <p>It is also the only way the sale opens at all today. {@code Event.isDueOnSale} has no caller
-   * in inventory-service: nothing moves a {@code SCHEDULED} event to {@code ON_SALE} on its own,
-   * which the first run of this simulation discovered by waiting forty seconds for a sale that had
-   * been due for a quarter of an hour.
+   * <p>It used to be the only way the sale opened at all, which is how this simulation found that
+   * nothing moved a {@code SCHEDULED} event to {@code ON_SALE} on its own: the first run waited
+   * forty seconds for a sale that had been due for a quarter of an hour. The sale opener of README
+   * section 6.3 now does it on the clock, within its interval of {@code onSaleAt}. This scenario
+   * stays because the reason above is the real one: a benchmark wants the instant it starts
+   * measuring from to be a request it made, not a poll somewhere else that happened to notice.
    */
   private final ScenarioBuilder opener =
       scenario("opener")

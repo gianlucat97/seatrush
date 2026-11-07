@@ -59,6 +59,10 @@ import org.testcontainers.junit.jupiter.EnabledIfDockerAvailable;
 @SpringBootTest
 @TestPropertySource(
     properties = {
+      // The sale opener is driven by hand here, so the scheduled one is pushed out of the way:
+      // every event this test creates has its sale already due, and a pass firing between the
+      // fixture and the assertion would move a lifecycle this test is the only author of.
+      "seatrush.sale-opener.interval=1h",
       // Claimed as soon as it is pending, so the test does not wait half a minute to prove that
       // an abandoned entry comes back.
       "seatrush.stream-relay.claim-idle-after=1ms",

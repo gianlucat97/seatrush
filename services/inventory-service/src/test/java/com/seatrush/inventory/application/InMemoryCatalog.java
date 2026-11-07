@@ -9,6 +9,7 @@ import com.seatrush.inventory.domain.SeatPrice;
 import com.seatrush.inventory.domain.SeatRepository;
 import com.seatrush.inventory.domain.SeatSaleRepository;
 import com.seatrush.inventory.domain.Section;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -60,6 +61,13 @@ final class InMemoryCatalog implements EventRepository, SeatRepository, SeatSale
     List<Event> all = new ArrayList<>(events.values());
     all.sort(Comparator.comparing(Event::onSaleAt).thenComparing(Event::createdAt));
     return all;
+  }
+
+  @Override
+  public List<Event> findDueToOpen(Instant now, int limit) {
+    // No locking here, and nothing to stand in for it: this double has one caller at a time. What
+    // it does reproduce is the predicate, which is Event.isDueOnSale read as a query.
+    return findAll().stream().filter(event -> event.isDueOnSale(now)).limit(limit).toList();
   }
 
   @Override

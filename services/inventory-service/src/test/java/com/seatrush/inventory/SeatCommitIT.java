@@ -63,6 +63,10 @@ import org.testcontainers.junit.jupiter.EnabledIfDockerAvailable;
 @SpringBootTest
 @TestPropertySource(
     properties = {
+      // The sale opener is driven by hand here, so the scheduled one is pushed out of the way:
+      // every event this test creates has its sale already due, and a pass firing between the
+      // fixture and the assertion would move a lifecycle this test is the only author of.
+      "seatrush.sale-opener.interval=1h",
       // Every scheduled job is driven by hand here: one firing between an act and an assertion
       // would make the result a race rather than a result.
       "seatrush.hold.sweeper-interval=1h",
