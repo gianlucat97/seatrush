@@ -378,6 +378,26 @@ class InvariantsTest {
   }
 
   @Test
+  void aHoldFrozenForAnOrderNobodyHasBreaksI7() {
+    SnapshotFixture run =
+        SnapshotFixture.clean()
+            .changeHold(
+                RELEASED_HOLD,
+                hold ->
+                    new Snapshot.Hold(
+                        hold.holdId(),
+                        hold.userId(),
+                        hold.eventId(),
+                        hold.seatIds(),
+                        hold.expiresAt(),
+                        "CHECKOUT",
+                        SECOND_ORDER));
+
+    assertThat(violations(run, Invariant.DEADLINES_RESPECTED))
+        .anyMatch(found -> found.contains("which the order database has never heard of"));
+  }
+
+  @Test
   void aCheckoutPastItsDeadlineBreaksI7() {
     SnapshotFixture run =
         SnapshotFixture.clean()

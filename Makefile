@@ -12,7 +12,7 @@ COMPOSE ?= docker compose --file $(COMPOSE_FILE) --env-file .env
 
 .DEFAULT_GOAL := help
 .PHONY: help format build test-it clean up down images seed ui ui-build
-.PHONY: k8s-up k8s-down k8s-seed k8s-status k8s-template load-small check
+.PHONY: k8s-up k8s-down k8s-seed k8s-status k8s-template load-small load-full check
 .PHONY: k8s-observability k8s-hpa k8s-grafana
 
 # The frontend is a Node project rather than a Maven module, so it has its own
@@ -125,8 +125,17 @@ k8s-grafana: ## Open the dashboards of the cluster on http://localhost:3001
 	@echo "the three dashboards of README section 14.4: http://localhost:3001"
 	@$(KUBECTL_OBSERVABILITY) port-forward service/grafana 3001:3000
 
+# Flags for a run, passed to Maven, which is how one knob of README section 18.1 is changed
+# without a third preset:
+#   make load-small LOAD_FLAGS="-Dseatrush.load.spectators=0"
+# load-tests/gatling/src/test/java/com/seatrush/load/LoadProfile.java lists them all.
+LOAD_FLAGS ?=
+
 load-small: ## 5,000-user load test followed by the invariant checker
-	@echo "make load-small arrives with the Gatling scenarios (M7); make check is here."; exit 1
+	@./scripts/load.sh small $(LOAD_FLAGS)
+
+load-full: ## The benchmark of README section 18.1: 200,000 buyers, needs a cluster and an injector
+	@./scripts/load.sh full $(LOAD_FLAGS)
 
 # Flags for the run, since every one of them has a default that fits the local stack:
 #   make check CHECK_FLAGS="--settle-timeout 0"      look at a sale that is still running

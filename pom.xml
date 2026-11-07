@@ -317,6 +317,7 @@
       </activation>
       <modules>
         <module>load-tests/invariant-checker</module>
+        <module>load-tests/gatling</module>
       </modules>
     </profile>
   </profiles>
