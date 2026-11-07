@@ -42,7 +42,8 @@ class SeatEventRelayTest {
           catalog,
           stream,
           publisher,
-          new StreamRelayProperties(Duration.ofMillis(100), 10, Duration.ofSeconds(30)),
+          new StreamRelayProperties(
+              Duration.ofMillis(100), 10, Duration.ofSeconds(30), Duration.ofSeconds(30)),
           meters,
           clock);
 

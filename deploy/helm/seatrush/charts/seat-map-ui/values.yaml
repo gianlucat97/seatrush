@@ -87,3 +87,9 @@ spring: false
 # Read by the condition of the umbrella Chart.yaml. A release serving only an API turns
 # this off and has no client.
 enabled: true
+
+# Who may reach the client (README section 24.7): the ingress controller, which serves it on
+# every path the gateway does not take. It publishes no meters, so the scrape rule of section
+# 24.4 does not apply to it either.
+networkPolicy:
+  allowFromIngressController: true

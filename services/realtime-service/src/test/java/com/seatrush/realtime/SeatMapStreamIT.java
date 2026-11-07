@@ -226,6 +226,45 @@ class SeatMapStreamIT {
     assertThat(streams.watching(eventId)).isEqualTo(1);
   }
 
+  /**
+   * The pod goes away and every client is told when to come back (README section 24.6).
+   *
+   * <p>Three things have to be true on the wire, and only a real response can show them: a second
+   * retry hint, longer than the one the greeting carried, somewhere in the jitter window; a comment
+   * saying why; and nothing after it, because a delta written to a stream that has been handed back
+   * is a delta the client would apply to a map it is about to reload.
+   */
+  @Test
+  void tellsEveryClientWhenToComeBackAsThisPodGoesAway() throws Exception {
+    MvcResult stream = connect();
+    assertThat(streams.watching(eventId)).isEqualTo(1);
+
+    streams.closeStreams();
+
+    List<Long> hints = retryHintsOf(stream);
+    assertThat(hints).as("the greeting's hint and the shutdown one").hasSize(2);
+    assertThat(hints.getLast())
+        .as("jittered over [2s, 4s), so ten thousand clients do not return together")
+        .isBetween(2_000L, 3_999L);
+    assertThat(body(stream)).contains("shutting down");
+
+    publish(new SeatsHeld(eventId, List.of("A-1-1"), 1L, HOLD_ID));
+    waitUntil(() -> deltas.appliedVersion(eventId) >= 1L);
+    deltas.pushTo(eventId);
+    assertThat(body(stream))
+        .as("a stream handed back is written to no more")
+        .doesNotContain("event:DELTA");
+  }
+
+  /** Every `retry:` on the wire, in the order it was written. */
+  private static List<Long> retryHintsOf(MvcResult stream) {
+    return body(stream)
+        .lines()
+        .filter(line -> line.startsWith("retry:"))
+        .map(line -> Long.parseLong(line.substring("retry:".length()).trim()))
+        .toList();
+  }
+
   private MvcResult connect() throws Exception {
     return mvc.perform(get("/api/events/{id}/seatmap/stream", eventId))
         .andExpect(request().asyncStarted())

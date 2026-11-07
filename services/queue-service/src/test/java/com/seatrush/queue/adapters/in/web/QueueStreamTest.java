@@ -54,6 +54,7 @@ class QueueStreamTest {
   private static final UUID ADA = UUID.fromString("0199c5f0-1111-7000-8000-00000000a001");
   private static final Instant ON_SALE_AT = Instant.parse("2026-06-01T10:00:00Z");
   private static final Duration HEARTBEAT = Duration.ofSeconds(15);
+  private static final Duration SHUTDOWN_RECONNECT = Duration.ofSeconds(2);
 
   @Autowired private MockMvc mvc;
   @Autowired private QueueStreams streams;
@@ -84,7 +85,7 @@ class QueueStreamTest {
 
     @Bean
     SseProperties sseProperties() {
-      return new SseProperties(HEARTBEAT, Duration.ofMinutes(30));
+      return new SseProperties(HEARTBEAT, Duration.ofMinutes(30), SHUTDOWN_RECONNECT);
     }
 
     @Bean

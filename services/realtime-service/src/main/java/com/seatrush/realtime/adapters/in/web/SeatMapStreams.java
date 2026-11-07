@@ -10,12 +10,16 @@ import java.io.IOException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.event.ContextClosedEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.http.MediaType;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -162,6 +166,43 @@ public class SeatMapStreams implements SeatMapAudience {
     }
   }
 
+  /**
+   * Hands every stream back before this pod stops serving (README section 24.6).
+   *
+   * <p>A pod of this service is removed on purpose now, not only when somebody rolls a release: the
+   * autoscaling of section 24.3 takes one away when the fleet is larger than the connections need,
+   * and each one is holding clients that are watching a seat map. Dropped, those clients see a
+   * broken stream and come back at whatever their browser decided; told, they come back on a delay
+   * this service chose.
+   *
+   * <p>The delay is jittered per client, over a window of twice the configured one. That is the
+   * whole reason this is not simply a shorter default: ten thousand clients handed the same delay
+   * are ten thousand reconnections in the same instant, each one a snapshot of the seat map to
+   * build, arriving at the pods that are left exactly when one of their neighbours has just gone.
+   *
+   * <p>On {@link ContextClosedEvent} and not in a {@code @PreDestroy}, because the ordering is the
+   * point: the event is published before the web server begins its graceful shutdown, so the
+   * streams are closed while the container can still write to them. The other way round, the
+   * shutdown would wait out its whole grace period on connections that are never going to end by
+   * themselves, and then cut them anyway.
+   */
+  @EventListener(ContextClosedEvent.class)
+  public void closeStreams() {
+    List<Listener> listeners = byEvent.values().stream().flatMap(Set::stream).toList();
+    for (Listener listener : listeners) {
+      listener.goodbye(reconnectDelay());
+    }
+    if (!listeners.isEmpty()) {
+      log.info("closed {} seat map streams on shutdown", listeners.size());
+    }
+  }
+
+  /** Somewhere in [delay, 2 x delay), so the clients of this pod do not return together. */
+  private Duration reconnectDelay() {
+    long shortest = sse.shutdownReconnectDelay().toMillis();
+    return Duration.ofMillis(shortest + ThreadLocalRandom.current().nextLong(shortest));
+  }
+
   private Set<Listener> listenersOf(UUID eventId) {
     return byEvent.computeIfAbsent(eventId, id -> ConcurrentHashMap.newKeySet());
   }
@@ -226,6 +267,28 @@ public class SeatMapStreams implements SeatMapAudience {
 
     private synchronized boolean quietFor(Duration silence, Instant now) {
       return !lastWriteAt.plus(silence).isAfter(now);
+    }
+
+    /**
+     * The last thing written to a stream this pod is giving up: when to come back, and why.
+     *
+     * <p>A failure here is ignored on purpose. There is nothing to say to a client that has already
+     * gone, and the stream is being completed either way.
+     */
+    private synchronized void goodbye(Duration reconnectAfter) {
+      try {
+        emitter.send(
+            SseEmitter.event()
+                .reconnectTime(reconnectAfter.toMillis())
+                .comment("this pod is shutting down, reconnect for a fresh snapshot"));
+      } catch (IOException | IllegalStateException gone) {
+        log.debug("a stream of event {} was already closed at shutdown", eventId);
+      }
+      try {
+        emitter.complete();
+      } catch (RuntimeException alreadyGone) {
+        log.debug("a stream of event {} could not be completed", eventId, alreadyGone);
+      }
     }
   }
 }

@@ -49,6 +49,18 @@ seatrush:
     secret: ${SEATRUSH_ADMISSION_SECRET:}
     token-ttl: ${SEATRUSH_ADMISSION_TOKEN_TTL:10m}
 
+# How long this process is allowed to take to stop (README section 24.6). The chart gives a
+# pod 45 seconds and sleeps 5 of them before the signal; what is left for the process is 40,
+# and this is the bound on the one phase that matters here.
+#
+# It matters more here than anywhere else, and the reason is worth knowing: this service
+# proxies both SSE streams of README section 12, and a proxied stream is an exchange that
+# never completes. Graceful shutdown, which is the default in Boot 4, therefore waits for a
+# stream that has no reason to end, and this timeout is what stops it waiting. The clients
+# behind it reconnect the way an EventSource does, and the pod they land on is one that was
+# told when to expect them (QueueStreams and SeatMapStreams of the services behind).
+spring.lifecycle.timeout-per-shutdown-phase: 10s
+
 server:
   port: ${SERVER_PORT:8080}
 

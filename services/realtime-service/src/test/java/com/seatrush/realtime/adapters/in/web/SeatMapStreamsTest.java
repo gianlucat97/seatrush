@@ -29,13 +29,14 @@ class SeatMapStreamsTest {
   private static final Instant NOW = Instant.parse("2026-06-01T10:00:00Z");
   private static final UUID EVENT_ID = UUID.fromString("0199c5f0-2222-7000-8000-00000000b002");
   private static final UUID OTHER_EVENT = UUID.fromString("0199c5f0-2222-7000-8000-00000000b003");
+  private static final Duration SHUTDOWN_RECONNECT = Duration.ofSeconds(2);
 
   private final MutableClock clock = MutableClock.at(NOW);
   private final MeterRegistry meters = new SimpleMeterRegistry();
   private final SeatMapStreams streams =
       new SeatMapStreams(
           new RealtimeProperties(Duration.ofMillis(200)),
-          new SseProperties(Duration.ofSeconds(15), Duration.ofMinutes(30)),
+          new SseProperties(Duration.ofSeconds(15), Duration.ofMinutes(30), SHUTDOWN_RECONNECT),
           clock,
           meters);
 

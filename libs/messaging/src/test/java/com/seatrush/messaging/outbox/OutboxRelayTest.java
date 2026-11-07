@@ -22,6 +22,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 class OutboxRelayTest {
 
   private static final Duration POLL = Duration.ofMillis(100);
+  private static final Duration STALE_AFTER = Duration.ofSeconds(30);
 
   private final MutableClock clock = MutableClock.atArbitraryInstant();
   private final MessageFactory messages = new MessageFactory(new UuidV7Generator(clock), clock);
@@ -37,7 +38,7 @@ class OutboxRelayTest {
         new TransactionTemplate(transactionManager),
         store,
         publisher,
-        new OutboxProperties(POLL, batchSize),
+        new OutboxProperties(POLL, batchSize, STALE_AFTER),
         clock,
         meters);
   }

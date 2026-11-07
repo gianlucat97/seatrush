@@ -1,6 +1,7 @@
 package com.seatrush.messaging.outbox;
 
 import com.seatrush.messaging.config.OutboxProperties;
+import com.seatrush.messaging.health.Heartbeat;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -51,6 +52,15 @@ public class OutboxRelay {
 
   private final Counter relayed;
 
+  /**
+   * When a pass last completed, which is what the readiness probe of README section 24.6 reads.
+   *
+   * <p>Separate from the lag gauge above, and the two answer opposite questions: the gauge says how
+   * far behind the rows are, which is a fact about the broker and about the other pods as much as
+   * about this one, and this says whether this pod is still relaying at all.
+   */
+  private final Heartbeat heartbeat;
+
   public OutboxRelay(
       TransactionTemplate transactions,
       OutboxStore store,
@@ -73,6 +83,12 @@ public class OutboxRelay {
         .description("Age of the oldest unpublished outbox entry")
         .register(meters);
     this.relayed = Counter.builder("seatrush.outbox.relayed").register(meters);
+    this.heartbeat = new Heartbeat("postgres outbox relay", properties.staleAfter(), clock);
+  }
+
+  /** What a readiness probe asks this relay, which is only whether it is still passing. */
+  public Heartbeat heartbeat() {
+    return heartbeat;
   }
 
   /** One pass, on a schedule, on every pod. */
@@ -82,6 +98,10 @@ public class OutboxRelay {
   public void relay() {
     try {
       relayOnce();
+      // After the pass and not before it, because what readiness is being told is that this relay
+      // completed one: a pass that throws leaves the heartbeat where it was, and enough of those
+      // in a row is the pod leaving its Service (README section 24.6).
+      heartbeat.passed();
     } catch (RuntimeException e) {
       // Nothing is lost by a failed pass. The transaction rolled back, so no row was marked, and
       // the next pass claims the same rows again.

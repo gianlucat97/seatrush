@@ -7,6 +7,7 @@ import com.seatrush.inventory.domain.EventStatus;
 import com.seatrush.inventory.domain.SeatEventPublisher;
 import com.seatrush.inventory.domain.SeatEventRecord;
 import com.seatrush.inventory.domain.SeatEventStream;
+import com.seatrush.messaging.health.Heartbeat;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
@@ -73,6 +74,15 @@ public class SeatEventRelay {
    */
   private final AtomicLong lagMillis = new AtomicLong();
 
+  /**
+   * When a pass last completed, which is what the readiness probe of README section 24.6 reads.
+   *
+   * <p>The gauge above and this answer opposite questions. A lag says how far behind the entries
+   * are, which is as much about Redis and the broker as about this pod; this says whether this pod
+   * is still relaying at all, and it is the only one of the two a probe may act on.
+   */
+  private final Heartbeat heartbeat;
+
   public SeatEventRelay(
       EventRepository events,
       SeatEventStream stream,
@@ -93,6 +103,12 @@ public class SeatEventRelay {
         .tag("store", "redis")
         .description("Age of the oldest unpublished outbox entry")
         .register(meters);
+    this.heartbeat = new Heartbeat("redis stream relay", properties.staleAfter(), clock);
+  }
+
+  /** What a readiness probe asks this relay, which is only whether it is still passing. */
+  public Heartbeat heartbeat() {
+    return heartbeat;
   }
 
   /** One pass over every sale that can still produce seat events. */
@@ -102,6 +118,9 @@ public class SeatEventRelay {
   public void relay() {
     try {
       relayOnce();
+      // After the pass: what readiness is told is that this relay completed one, and a pass that
+      // throws leaves the heartbeat where it was (README section 24.6).
+      heartbeat.passed();
     } catch (RuntimeException e) {
       // Nothing is lost by a failed pass: an entry is only acknowledged once it is in Kafka, so
       // whatever this pass did not finish is read again by the next one.

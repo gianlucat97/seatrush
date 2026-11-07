@@ -32,7 +32,15 @@ What it checks, given the rendered manifests of `helm template`:
     area that looks like nothing and undoes a scale-up on the next `helm upgrade`;
   * every autoscaler names a Deployment of the release, stays within its own bounds, and
     reads something that exists: a pod metric the adapter of section 24.4 is configured to
-    serve, and a topic and consumer group the service it scales really uses.
+    serve, and a topic and consumer group the service it scales really uses;
+  * every workload has a PodDisruptionBudget whose selector matches it, and no budget is
+    written as a `minAvailable`, which over a single replica is a node nothing can drain;
+  * every pod this release lets go of is given the pre-stop pause of section 24.6, without
+    which a rollout drops the requests sent to it between its removal from the Service and the
+    signal to its process;
+  * the NetworkPolicies of section 24.7 permit every call the chart itself configures, which is
+    the check that matters most here: a policy that refuses one of them renders, installs and
+    answers nothing, and the symptom is a timeout rather than an error.
 
 Usage:
     helm template seatrush deploy/helm/seatrush > rendered.yaml
@@ -88,6 +96,13 @@ COMPOSE_TO_SUBCHART = {"ui": "seat-map-ui"}
 ALLOWED_TO_RUN_AS_ROOT = {"seat-map-ui"}
 
 WORKLOAD_KINDS = {"Deployment", "StatefulSet", "DaemonSet", "Job"}
+
+# The label a NetworkPolicy, a PodDisruptionBudget and a Service all select a workload by.
+NAME_LABEL = "app.kubernetes.io/name"
+
+# The label the API server puts on every namespace, which is how a policy names one without the
+# other chart having to cooperate.
+NAMESPACE_LABEL = "kubernetes.io/metadata.name"
 
 # Where the pod metrics of an HPA have to be declared (README section 24.4). The adapter is an
 # add-on of the cluster rather than a part of the release, which is exactly why this needs a
@@ -232,6 +247,210 @@ def service_consumer_groups():
         if match:
             groups[application.parents[3].name] = match.group(1).strip()
     return groups
+
+
+def workload_names(manifests):
+    """The `app.kubernetes.io/name` of each workload, by the workload's own name.
+
+    Both the policy and the budget checks are about selectors, and a selector matches that label
+    rather than the resource name.
+    """
+    names = {}
+    for manifest in manifests:
+        if manifest.get("kind") not in WORKLOAD_KINDS:
+            continue
+        labels = manifest["spec"]["template"]["metadata"].get("labels") or {}
+        names[manifest["metadata"]["name"]] = labels.get(NAME_LABEL)
+    return names
+
+
+def check_disruption(findings, manifests):
+    """Every workload is covered by a budget, and no budget is the undrainable kind.
+
+    `minAvailable: 1` over a service that scales from one replica is a pod the API server
+    refuses to evict at all: `kubectl drain` hangs, the node never cordons, and the reason is
+    three levels inside `kubectl describe pdb`. It is a one-word mistake that only shows up the
+    first time somebody upgrades a node, which is exactly the kind this file exists for.
+    """
+    names = workload_names(manifests)
+    budgets = {}
+    for manifest in manifests:
+        if manifest.get("kind") != "PodDisruptionBudget":
+            continue
+        name = manifest["metadata"]["name"]
+        spec = manifest["spec"]
+        findings.check(
+            "minAvailable" not in spec,
+            f"{name}: uses minAvailable. Over a service that scales from one replica that is a "
+            "pod nothing can evict and a node nothing can drain; maxUnavailable says the useful "
+            "half of it.",
+        )
+        selector = (spec.get("selector") or {}).get("matchLabels") or {}
+        selected = [
+            workload
+            for workload, label in names.items()
+            if label is not None and label == selector.get(NAME_LABEL)
+        ]
+        findings.check(
+            len(selected) == 1,
+            f"{name}: selects {selected or 'no workload'}, and a budget that protects nothing is "
+            "a budget that reads as protection",
+        )
+        budgets.update({workload: name for workload in selected})
+
+    # Only the release's own Deployments. The stores are single instances with nothing to
+    # protect: a budget over one of them either refuses every drain or permits it, and the
+    # restart-with-data-loss path of README section 16 is a behaviour this system is built to
+    # survive rather than one to stand in the way of.
+    for manifest in manifests:
+        if manifest.get("kind") != "Deployment":
+            continue
+        workload = manifest["metadata"]["name"]
+        if not _is_ours(workload):
+            continue
+        findings.check(
+            workload in budgets,
+            f"{workload}: no PodDisruptionBudget, so a node drain may take every pod of it at "
+            "once",
+        )
+
+
+def check_termination(findings, manifests):
+    """Every pod of the release pauses before its process is signalled.
+
+    The pause covers the window where one controller has removed the pod from its Service and
+    another has signalled its container, with neither waiting for the other. Without it a
+    rollout and every scale-down drop the requests that were already on their way, which looks
+    like a handful of 502s nobody can reproduce.
+    """
+    for manifest in manifests:
+        if manifest.get("kind") != "Deployment":
+            continue
+        workload = manifest["metadata"]["name"]
+        spec = manifest["spec"]["template"]["spec"]
+        if not _is_ours(workload):
+            continue
+        for container in spec["containers"]:
+            hook = (container.get("lifecycle") or {}).get("preStop")
+            findings.check(
+                hook is not None,
+                f"{workload}/{container['name']}: no preStop hook, so this pod stops serving "
+                "the moment it is signalled and the endpoint caches of its callers have not "
+                "caught up",
+            )
+        findings.check(
+            "terminationGracePeriodSeconds" in spec,
+            f"{workload}: no terminationGracePeriodSeconds, so the pre-stop pause and the "
+            "graceful shutdown behind it have no stated budget",
+        )
+
+
+def check_network_policies(findings, manifests, specs, service_port_map):
+    """Every call this chart configures is a call the policies permit.
+
+    This is the check that earns its place. A NetworkPolicy is additive and silent: the gateway
+    is told where queue-service answers in a values file, queue-service's policy says who may
+    call it in another, and a release where those two disagree renders cleanly, installs
+    cleanly, and then times out the first time anybody joins a queue. Nothing but a comparison
+    of the two notices.
+    """
+    policies = [m for m in manifests if m.get("kind") == "NetworkPolicy"]
+    if not policies:
+        return
+
+    findings.check(
+        any(not (policy["spec"].get("podSelector") or {}) for policy in policies),
+        "no deny-all policy selects every pod of the namespace, so a workload added without one "
+        "of its own is open to the cluster and the policies beside it read as a rule they are not",
+    )
+
+    names = workload_names(manifests)
+    allowed = {}
+    for policy in policies:
+        selector = (policy["spec"].get("podSelector") or {}).get("matchLabels") or {}
+        target = selector.get(NAME_LABEL)
+        if target is None:
+            continue
+        for rule in policy["spec"].get("ingress") or []:
+            ports = {port["port"] for port in rule.get("ports") or []}
+            for peer in rule.get("from") or []:
+                pod = (peer.get("podSelector") or {}).get("matchLabels", {}).get(NAME_LABEL)
+                namespace = (
+                    (peer.get("namespaceSelector") or {}).get("matchLabels", {}).get(NAMESPACE_LABEL)
+                )
+                for port in ports:
+                    if pod:
+                        allowed.setdefault((target, port), set()).add("pod:" + pod)
+                    if namespace:
+                        allowed.setdefault((target, port), set()).add("namespace:" + namespace)
+
+    for workload, spec in sorted(specs.items()):
+        caller = names.get(workload)
+        for container in spec["containers"]:
+            for variable in container.get("env") or []:
+                value = variable.get("value")
+                if not isinstance(value, str):
+                    continue
+                match = URL.match(value)
+                if not match:
+                    continue
+                host, port = match.group(1), int(match.group(2))
+                if host not in service_port_map:
+                    continue
+                target = _selected_by(manifests, host)
+                if target is None:
+                    continue
+                findings.check(
+                    "pod:" + caller in allowed.get((target, port), set()),
+                    f"{workload}: {variable['name']} calls {target} on {port}, and no "
+                    f"NetworkPolicy of {target} allows {caller}. The call renders, installs and "
+                    "then times out.",
+                )
+
+    # The scrape of section 24.4, which is the other half of the autoscaling: a pod no Prometheus
+    # can reach is a pod whose SSE connections no HPA can read.
+    for workload, spec in sorted(specs.items()):
+        target = names.get(workload)
+        container = spec["containers"][0]
+        annotated = _scrape_port(manifests, workload)
+        if annotated is None:
+            continue
+        findings.check(
+            any(
+                peer.startswith("namespace:")
+                for peer in allowed.get((target, annotated), set())
+            ),
+            f"{workload}: annotated for scraping on {annotated} and no NetworkPolicy lets "
+            "another namespace reach it, so the only reader of its metrics is itself",
+        )
+
+
+def _is_ours(workload):
+    """Whether a workload is one of the release's own, rather than a store it installs."""
+    component = workload.split("-", 1)[1] if "-" in workload else workload
+    return component not in {"postgres", "redis", "kafka"}
+
+
+def _selected_by(manifests, service_name):
+    """The `app.kubernetes.io/name` the Service of this name selects on."""
+    for manifest in manifests:
+        if manifest.get("kind") != "Service" or manifest["metadata"]["name"] != service_name:
+            continue
+        return (manifest["spec"].get("selector") or {}).get(NAME_LABEL)
+    return None
+
+
+def _scrape_port(manifests, workload):
+    """The port a workload asks to be scraped on, or None when it asks for nothing."""
+    for manifest in manifests:
+        if manifest.get("kind") not in WORKLOAD_KINDS:
+            continue
+        if manifest["metadata"]["name"] != workload:
+            continue
+        annotations = manifest["spec"]["template"]["metadata"].get("annotations") or {}
+        port = annotations.get("prometheus.io/port")
+        return int(port) if port else None
+    return None
 
 
 def check_environment_parity(findings, specs, release):
@@ -533,6 +752,9 @@ def main():
     check_probes(findings, manifests, arguments.release)
     check_scrape_annotations(findings, manifests)
     check_autoscaling(findings, manifests, specs)
+    check_disruption(findings, manifests)
+    check_termination(findings, manifests)
+    check_network_policies(findings, manifests, specs, service_ports(manifests))
     check_security(findings, specs)
     check_resources(findings, specs)
     check_images(findings, specs)
@@ -546,11 +768,13 @@ def main():
         for manifest in manifests
         if manifest.get("kind") in {"HorizontalPodAutoscaler", "ScaledObject"}
     )
+    policies = sum(1 for manifest in manifests if manifest.get("kind") == "NetworkPolicy")
     print(
-        f"{len(manifests)} manifests, {len(specs)} workloads, {autoscalers} autoscalers: "
-        "environment and topics in step with the Compose stack, every URL and secret key "
-        "resolved, every container probed, bounded, scrapeable and not root, and nothing "
-        "scaled that also states a replica count"
+        f"{len(manifests)} manifests, {len(specs)} workloads, {autoscalers} autoscalers, "
+        f"{policies} policies: environment and topics in step with the Compose stack, every URL "
+        "and secret key resolved and permitted, every container probed, bounded, scrapeable, "
+        "budgeted, paused before termination and not root, and nothing scaled that also states "
+        "a replica count"
     )
     return 0
 

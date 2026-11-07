@@ -15,12 +15,16 @@ import java.io.IOException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.event.ContextClosedEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.http.MediaType;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -262,6 +266,43 @@ public class QueueStreams {
     return false;
   }
 
+  /**
+   * Hands every stream back before this pod stops serving (README section 24.6).
+   *
+   * <p>A pod of this service is removed on purpose now, not only when somebody rolls a release: the
+   * autoscaling of section 24.3 takes one away once the fleet is larger than the connections need.
+   * What that pod is holding is people waiting for a sale, and the queue they are waiting in is in
+   * Redis rather than here, so the only thing lost by closing the stream is the stream: they
+   * reconnect, are told the same position, and nobody moves in the queue.
+   *
+   * <p>Which is exactly why they must be told to come back on a delay of this service's choosing,
+   * jittered per client over a window of twice it. Ten thousand waiting clients handed the same
+   * delay would arrive at the remaining pods together, and the pass that places them is one Redis
+   * read per sale however many are waiting: it is the joining that costs, not the waiting.
+   *
+   * <p>On {@link ContextClosedEvent} and not in a {@code @PreDestroy}, because the ordering is the
+   * point: the event is published before the web server begins its graceful shutdown, so these
+   * streams are closed while the container can still write to them. The other way round, the
+   * shutdown would wait out its whole grace period on connections that never end by themselves.
+   */
+  @EventListener(ContextClosedEvent.class)
+  public void closeStreams() {
+    List<Listener> listeners =
+        byEvent.values().stream().flatMap(listener -> listener.values().stream()).toList();
+    for (Listener listener : listeners) {
+      listener.goodbye(reconnectDelay());
+    }
+    if (!listeners.isEmpty()) {
+      log.info("closed {} waiting room streams on shutdown", listeners.size());
+    }
+  }
+
+  /** Somewhere in [delay, 2 x delay), so the clients of this pod do not return together. */
+  private Duration reconnectDelay() {
+    long shortest = sse.shutdownReconnectDelay().toMillis();
+    return Duration.ofMillis(shortest + ThreadLocalRandom.current().nextLong(shortest));
+  }
+
   private Map<UUID, Listener> listenersOf(UUID eventId) {
     return byEvent.computeIfAbsent(eventId, id -> new ConcurrentHashMap<>());
   }
@@ -358,6 +399,29 @@ public class QueueStreams {
       } catch (RuntimeException alreadyGone) {
         log.debug("the stream of user {} was already closed", userId, alreadyGone);
       }
+    }
+
+    /**
+     * The last thing written to a stream this pod is giving up: when to come back, and why.
+     *
+     * <p>A failure here is ignored on purpose. There is nothing to say to a client that has already
+     * gone, and the stream is being completed either way.
+     */
+    private void goodbye(Duration reconnectAfter) {
+      try {
+        writeGoodbye(reconnectAfter);
+      } catch (IOException | IllegalStateException gone) {
+        log.debug("the stream of user {} was already closed at shutdown", userId);
+      }
+      complete();
+    }
+
+    private synchronized void writeGoodbye(Duration reconnectAfter) throws IOException {
+      emitter.send(
+          SseEmitter.event()
+              .reconnectTime(reconnectAfter.toMillis())
+              .comment("this pod is shutting down, reconnect to keep your place"));
+      lastWriteAt = clock.instant();
     }
   }
 }

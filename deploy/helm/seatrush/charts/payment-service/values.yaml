@@ -36,3 +36,10 @@ keda:
   lagThreshold: 25
   topics:
     - payment.commands
+
+# Who may reach this service (README section 24.7). Nothing, and that is the point worth
+# writing down: this service is driven entirely by `payment.commands` and answers on
+# `payment.replies`, so it has no caller at all. Its port is open to the scrape of section 24.4
+# and to nothing else, which is a sharper statement than any list could be.
+networkPolicy:
+  allowFrom: []

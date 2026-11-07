@@ -52,3 +52,13 @@ autoscaling:
   minReplicas: 1
   maxReplicas: 4
   targetCPUUtilizationPercentage: 70
+
+# Who may reach this service (README section 24.7). Three callers and each one is a flow of
+# section 8: the gateway proxies the seat map and the holds, order-service makes the synchronous
+# freeze of section 12.7, and queue-service reads the event catalog to know which sales are open
+# (ADR-0015).
+networkPolicy:
+  allowFrom:
+    - gateway
+    - order-service
+    - queue-service

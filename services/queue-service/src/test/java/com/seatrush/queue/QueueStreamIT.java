@@ -225,6 +225,41 @@ class QueueStreamIT {
     door.admitFrom(calendar.event(eventId));
   }
 
+  /**
+   * The pod goes away and every waiting client is told when to come back (README section 24.6).
+   *
+   * <p>Nobody loses their place by this: the queue is in Redis and a reconnecting client is told
+   * the same position. What they must not do is all come back at once, which is what the jittered
+   * retry hint is for, and what only a real response can show is that the hint is on the wire at
+   * all.
+   */
+  @Test
+  void tellsEveryWaitingClientWhenToComeBackAsThisPodGoesAway() throws Exception {
+    List<UUID> waiting = queueUp(2);
+    List<MvcResult> streams = List.of(connect(waiting.getFirst()), connect(waiting.getLast()));
+    assertThat(this.streams.connections()).isEqualTo(2);
+
+    this.streams.closeStreams();
+
+    for (MvcResult stream : streams) {
+      List<Long> hints = retryHintsOf(stream);
+      assertThat(hints).as("one hint per message, and the last is the shutdown one").isNotEmpty();
+      assertThat(hints.getLast())
+          .as("jittered over [2s, 4s), so a full waiting room does not return together")
+          .isBetween(2_000L, 3_999L);
+      assertThat(body(stream)).contains("shutting down");
+    }
+  }
+
+  /** Every `retry:` on the wire, in the order it was written. */
+  private static List<Long> retryHintsOf(MvcResult stream) throws Exception {
+    return body(stream)
+        .lines()
+        .filter(line -> line.startsWith("retry:"))
+        .map(line -> Long.parseLong(line.substring("retry:".length()).trim()))
+        .toList();
+  }
+
   private MvcResult connect(UUID userId) throws Exception {
     return mvc.perform(get("/api/events/{id}/queue/stream", eventId).header("X-User-Id", userId))
         .andExpect(request().asyncStarted())

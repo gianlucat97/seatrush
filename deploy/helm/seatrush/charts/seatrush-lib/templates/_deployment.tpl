@@ -73,12 +73,13 @@ spec:
       securityContext:
         {{- toYaml (.Values.podSecurityContext | default .Values.global.podSecurityContext) | nindent 8 }}
       {{/*
-      Long enough for a stream to be closed and a consumer to commit where it got to. What
-      makes a pod use it is the graceful shutdown of README section 24, which arrives with
-      the autoscaling that makes a pod go away on its own; until then this is only the
-      ceiling on how long a rollout waits for one.
+      How long the kubelet waits between asking the process to stop and killing it, and the
+      services spend it: an SSE stream handed back, a consumer committing where it got to, a
+      relay pass finishing (README section 24.6). The arithmetic is in each service's own
+      application.yml, and it adds up to ten seconds less than this.
       */}}
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | default 45 }}
+      {{- include "seatrush.topologySpreadConstraints" . | nindent 6 }}
       {{- include "seatrush.initContainers" . | nindent 6 }}
       containers:
         - name: {{ .Chart.Name }}
@@ -97,6 +98,7 @@ spec:
             {{- . | nindent 12 }}
           {{- end }}
           {{- include "seatrush.probes" . | nindent 10 }}
+          {{- include "seatrush.preStop" . | nindent 10 }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           securityContext:
@@ -127,6 +129,34 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+{{- end -}}
+
+{{/*
+The pause between a pod being told to go and the process being told.
+
+A pod's removal from its Service endpoints and the signal to its container are two things that
+happen at once, in two controllers that do not wait for each other. So a pod that stopped
+listening the moment it was signalled would still be receiving requests from the ingress
+controller and from its neighbours for as long as their endpoint caches took to catch up,
+which is a handful of `502`s per rollout and per scale-down (README section 24.6).
+
+Sleeping in the pre-stop hook is the fix, and it is the whole of it: the kubelet runs the hook
+before sending the signal, so the process keeps serving normally for these few seconds while
+the endpoint removal propagates. Nothing is waiting for the sleep that is not already waiting.
+
+`sleep` and not a `curl` of something: the container is a JRE on a distroless-style image with
+no shell, so the exec form is the binary and its argument. `/bin/sleep` by absolute path, for
+the same reason.
+*/}}
+{{- define "seatrush.preStop" -}}
+{{- with .Values.global.terminationDelay }}
+lifecycle:
+  preStop:
+    exec:
+      command:
+        - /bin/sleep
+        - {{ . | quote }}
+{{- end }}
 {{- end -}}
 
 {{/*

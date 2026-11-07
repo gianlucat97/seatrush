@@ -279,7 +279,7 @@ class OutboxRelayIT {
         transactions,
         new JdbcOutboxStore(jdbc, clock),
         new KafkaMessagePublisher(kafka),
-        new OutboxProperties(Duration.ofMillis(100), 500),
+        new OutboxProperties(Duration.ofMillis(100), 500, Duration.ofSeconds(30)),
         clock,
         meters);
   }

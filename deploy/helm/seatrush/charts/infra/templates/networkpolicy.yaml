@@ -1,0 +1,40 @@
+{{/*
+Who may reach the three stores (README section 24.7).
+
+A store names the services that keep data in it, which is the list of README section 11 read as
+a rule: Postgres by the three services that own a database, Redis by the two that use the hot
+state of section 9.2, and the broker by everything that produces or consumes a message.
+
+The broker's list is the interesting one, because two of its callers are not pods of this
+release. The Prometheus of section 24.4 runs a Kafka exporter, and the KEDA operator of section
+24.3 asks the broker for consumer group lag from its own namespace; without both of those
+namespaces named here, the dashboards lose their lag panel and the two ScaledObjects report that
+they have run out of brokers to talk to. That failure is the one the advertised listener of
+kafka.yaml already cost a debugging session, and a policy is a second way to arrive at it.
+
+The broker is also in its own list. It is a single node in KRaft mode, so it is its own
+controller quorum: it connects to itself on 9093 through the headless Service, and under a
+deny-all that is ingress from a pod which happens to be itself.
+*/}}
+{{- $services := list "inventory-service" "order-service" "payment-service" "queue-service" "realtime-service" }}
+{{- include "seatrush.component.networkpolicy" (dict
+    "context" .
+    "name" "postgres"
+    "component" "infrastructure"
+    "peers" (list "inventory-service" "order-service" "payment-service")
+    "ports" (list .Values.global.postgres.port)) }}
+---
+{{ include "seatrush.component.networkpolicy" (dict
+    "context" .
+    "name" "redis"
+    "component" "infrastructure"
+    "peers" (list "inventory-service" "queue-service")
+    "ports" (list .Values.global.redis.port)) }}
+---
+{{ include "seatrush.component.networkpolicy" (dict
+    "context" .
+    "name" "kafka"
+    "component" "infrastructure"
+    "peers" (concat $services (list "kafka" "topics"))
+    "fromNamespaces" (list .Values.global.networkPolicy.observabilityNamespace .Values.global.networkPolicy.kedaNamespace)
+    "ports" (list 9092 9093)) }}

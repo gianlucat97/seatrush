@@ -1,3 +1,4 @@
 com.seatrush.messaging.config.MessagingAutoConfiguration
 com.seatrush.messaging.config.OutboxAutoConfiguration
 com.seatrush.messaging.config.ConsumerAutoConfiguration
+com.seatrush.messaging.config.HealthAutoConfiguration

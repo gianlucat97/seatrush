@@ -70,3 +70,9 @@ autoscaling:
   maxReplicas: 4
   podMetrics:
     seatrush_sse_connections: 2000
+
+# Who may reach this service (README section 24.7): the gateway, which proxies the join, the
+# polling fallback and the waiting room stream of section 12.3.
+networkPolicy:
+  allowFrom:
+    - gateway
