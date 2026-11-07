@@ -267,7 +267,15 @@ class SagaIT {
 
     assertThat(order().status()).isEqualTo(OrderStatus.COMPENSATING);
     assertThat(order().failure()).contains(FailureReason.TIMEOUT);
-    assertThat(sentOn(Topics.PAYMENT_COMMANDS)).contains(new VoidPayment(orderId));
+    // Awaited and not asserted outright, which the rest of this class does for the statuses and
+    // this one needs for the same reason. The sweep writes both commands to the outbox inside its
+    // transaction, and what `sentOn` reads is the topic: between the two there is a relay pass and
+    // a producer, and on a loaded runner the read can happen before the record is fetchable. The
+    // retry is free because relaying twice publishes a row once.
+    await()
+        .atMost(PATIENCE)
+        .untilAsserted(
+            () -> assertThat(sentOn(Topics.PAYMENT_COMMANDS)).contains(new VoidPayment(orderId)));
     assertThat(sentOn(Topics.INVENTORY_COMMANDS))
         .containsExactly(new ReleaseHold(orderId, EVENT_ID, holdId));
   }

@@ -940,7 +940,7 @@ There is no Alertmanager in the local stack. A firing rule is visible under **Al
 | order pod dies mid-SAGA | SAGA state is in Postgres; any pod continues when the next reply arrives or when the scheduler fires. |
 | Duplicate Kafka delivery | Ignored via `processed_message`; Lua scripts and payment operations are idempotent. |
 | Kafka temporarily unavailable | Outbox rows and stream entries accumulate; relays publish them when Kafka is back. No data loss. |
-| Redis restart with data loss | Active holds lost (users re-hold); seat state rebuilt from `seat_sale`; frozen holds of running SAGAs fail `CommitSeats` validation → SAGA compensates; Postgres guard prevents overselling throughout. A sale that lost its state and was never rebuilt is what the checker of [§17.1](#171-the-invariant-checker) reports as a sale nothing can be bought in, which is the one failure here that looks like nothing at all from the outside. |
+| Redis restart with data loss | Active holds lost (users re-hold); seat state rebuilt from `seat_sale`; frozen holds of running SAGAs fail `CommitSeats` validation → SAGA compensates; Postgres guard prevents overselling throughout. The rebuild is `POST /internal/events/{id}/rebuild` ([§12.7](#127-internal-endpoints-not-exposed-by-the-gateway)) and it is an operator action, not a timer: a sale that lost its state and was never rebuilt is what the checker of [§17.1](#171-the-invariant-checker) reports as a sale nothing can be bought in, which is the one failure here that looks like nothing at all from the outside. `restart-redis` of [§17.2](#172-the-chaos-experiments) performs both halves. |
 | Payment provider slow | Checkout latency grows; deadline bounds the wait before the pivot and compensates. |
 | Late `PaymentAuthorized` after timeout | `VoidPayment` sent again; no captured payment for a failed order. |
 | Capture fails after seats committed | Retried with backoff; order stays `SEATS_COMMITTED`; alert fires if retries are exhausted. |
@@ -963,7 +963,7 @@ There is no Alertmanager in the local stack. A firing rule is visible under **Al
 | Architecture | ArchUnit | Layering rules (domain has no framework dependency), no cross-service module dependency |
 | End-to-end | Docker Compose + REST Assured | Lobby → queue → admission → hold → checkout → ticket; sold-out notice |
 | Load | Gatling (Java DSL), `make load-small` | The scenario of [§18.1](#181-scenario), followed by the checker below ([§18.1.1](#1811-how-it-is-run)) |
-| Chaos | Scripts (`kubectl delete pod`, Redis restart, Kafka broker stop) during load | [§16](#16-failure-modes) behaviours |
+| Chaos | `make chaos` ([§17.2](#172-the-chaos-experiments)), during a load run | Six of the [§16](#16-failure-modes) rows, each with the recovery that row promises |
 | Invariants | The checker of [§17.1](#171-the-invariant-checker), over the stores of a deployment | Every invariant of [§4](#4-core-invariants) that a finished run can still be asked about |
 
 Time-dependent logic (TTLs, deadlines, sweepers) uses an injected `java.time.Clock` so tests are deterministic.
@@ -1007,6 +1007,27 @@ kubectl --namespace seatrush port-forward svc/seatrush-postgres 15432:5432 &
 kubectl --namespace seatrush port-forward svc/seatrush-redis 16379:6379 &
 make check CHECK_FLAGS="--postgres-port 15432 --redis-port 16379"
 ```
+
+### 17.2 The chaos experiments
+
+`scripts/chaos.sh`, run by `make chaos`, breaks six of the things [§16](#16-failure-modes) makes a promise about, waits for the system to do what that row says, and reports whether it did. It ends by running the invariant checker, because the point of killing a service mid-checkout is not that it restarts.
+
+| Experiment | The [§16](#16-failure-modes) row | What is measured |
+|---|---|---|
+| `kill-inventory` | inventory dies during a hold, and between the `seat_sale` commit and `markSold.lua` | It is serving again, and the invariants hold over what was being bought at the time |
+| `kill-order` | order dies mid-SAGA | The same, for the service whose state is a `saga_instance` row |
+| `kill-queue` | queue dies | The same, for the service whose state is entirely in Redis |
+| `kill-realtime` | realtime dies | The same, for the one service that holds nothing |
+| `stop-kafka` | Kafka temporarily unavailable | The unpublished `outbox` rows of all three databases while the broker is away, and that the backlog returns to nothing when it is back |
+| `restart-redis` | Redis restart with data loss | The hot state before and after, then the rebuild of [§12.7](#127-internal-endpoints-not-exposed-by-the-gateway), then that the seat map and `seat_sale` agree again |
+
+**Run it beside a load test, in a second terminal.** `make load-small` in one and `make chaos` in the other is the arrangement [§17](#17-testing-strategy) means by "during load", and the difference is not small: a service killed on an idle stack proves that it restarts, which is Docker's achievement rather than this system's. A service killed while four hundred buyers are holding seats and a hundred checkouts are mid-SAGA proves what that row of [§16](#16-failure-modes) actually claims, which is that nothing was lost by it.
+
+**Four outcomes, three exit codes.** `PASS` and `0` is the system doing what [§16](#16-failure-modes) says. `FAIL` and `1` is the system not doing it. `GAP` and `2` is a promise whose recovery step is not in the code, which is a finding rather than a regression and worth telling apart in a gate. `SKIP` is the fourth and changes no exit code: the experiment ran and had nothing to measure because nothing was in flight. It is deliberately not a pass, since an experiment that reports success over an idle stack is how a chaos suite turns into decoration. `stop-kafka` and `restart-redis` are the two that skip, and both skip only when there is no sale to lose anything from.
+
+**It works against either stack and detects which.** The experiments are written over five operations: crash a component, stop and start one, wait until it serves again, read a scalar out of a service's database, and run a Redis command. Each has a Compose implementation and a Kubernetes one, so the suite is the same six experiments on a laptop and on `make k8s-up`.
+
+One difference between the two is worth stating rather than hiding. In the cluster, deleting a pod is the whole experiment and the Deployment is what brings it back, which is the real behaviour. The Compose stack has no controller: `restart: unless-stopped` does not fire for a container killed through the API, which Docker counts as an explicit stop, so there the script starts the service again itself and says so on the line where it does it. What is being tested either way is the claim, which is about what the crash cost and not about who noticed.
 
 ## 18. Benchmark
 
@@ -1135,8 +1156,8 @@ seatrush/
 │   ├── messages/                   # generated JSON Schemas of Kafka messages
 │   ├── benchmarks/
 │   └── diagrams/
-├── scripts/                        # seed.sh, check.sh, load.sh, the two k8s scripts,
-│                                   # the CI validators, chaos
+├── scripts/                        # seed.sh, check.sh, load.sh, chaos.sh, the two
+│                                   # k8s scripts, the CI validators
 ├── .github/workflows/
 │   ├── ci.yml                      # format check, build, unit + integration tests, ArchUnit
 │   └── images.yml                  # build and push container images on tag
@@ -1301,6 +1322,7 @@ make ui           # the frontend dev server, against the stack's gateway
 make ui-build     # format check, unit tests and bundle of the frontend
 make load-small   # 5,000-user load test followed by the invariant checker
 make load-full    # the benchmark of section 18.1, for a cluster and an injector
+make chaos        # break what section 16 promises about, then check the invariants
 make check        # verify the invariants of section 4 against the running stack
 ```
 
@@ -1315,6 +1337,8 @@ Then `make seed` creates an event through the public API and prints the two link
 ```bash
 make load-small LOAD_FLAGS="-Dseatrush.load.lobbyUsers=150 -Dseatrush.load.arrivingUsers=350   -Dseatrush.load.spectators=20 -Dseatrush.load.watchers=20   -Dseatrush.load.rows=5 -Dseatrush.load.seatsPerRow=10"
 ```
+
+`make chaos` is the experiments of [§17.2](#172-the-chaos-experiments) against this stack. It is worth most in a second terminal while `make load-small` runs in the first: a service killed on an idle stack proves it restarts, and one killed mid-checkout proves the SAGA survived it.
 
 `make check` is the invariant checker of [§17.1](#171-the-invariant-checker) pointed at whatever is running: it reads the three databases and Redis, waits for any checkout still in flight, and prints a verdict on every invariant of [§4](#4-core-invariants) along with the figures of the run, exiting non-zero if any of them is broken. Buy a few seats in the browser and run it. Nothing has to be running under load for it to say something useful, and it writes nothing, so there is no state to clean up afterwards.
 
@@ -1901,7 +1925,7 @@ ADRs live in `docs/adr/` using the format *Context → Decision → Consequences
 | **M6 - Kubernetes** | Helm charts, HPA, KEDA, probes, PDBs, NetworkPolicies, hooks, kind setup | `make k8s-up` deploys the full system |
 | | *Arrived in three parts: the chart, the cluster and the hooks, which is what `make k8s-up` is ([§24.1](#241-the-chart), [§24.2](#242-the-local-cluster)); then the autoscaling of HPA and KEDA with the in-cluster Prometheus it reads ([§24.3](#243-autoscaling), [§24.4](#244-observability-in-the-cluster)); then the disruption, placement, graceful shutdown and NetworkPolicies ([§24.5](#245-disruption-and-placement), [§24.6](#246-graceful-shutdown), [§24.7](#247-networkpolicies)).* | |
 | **M7 - Benchmark and chaos** | Gatling scenarios, invariant checker, chaos scripts, published results | Results table filled, invariant checker green, chaos run documented |
-| | *Arriving in parts. The invariant checker of [§17.1](#171-the-invariant-checker) came first, because it is what every other part of this milestone is judged by: a load test with nothing to check it against produces a throughput figure and no verdict. Then the Gatling simulation of [§18.1.1](#1811-how-it-is-run), which is `make load-small` and `make load-full`. The chaos scripts and the published results of [§18.2](#182-environment) and [§18.3](#183-results) follow.* | |
+| | *Arriving in parts. The invariant checker of [§17.1](#171-the-invariant-checker) came first, because it is what every other part of this milestone is judged by: a load test with nothing to check it against produces a throughput figure and no verdict. Then the Gatling simulation of [§18.1.1](#1811-how-it-is-run), which is `make load-small` and `make load-full`. Then the chaos experiments of [§17.2](#172-the-chaos-experiments), which is `make chaos`. The published results of [§18.2](#182-environment) and [§18.3](#183-results) follow.* | |
 | **M8 - Polish** | ADRs complete, OpenAPI and message docs, demo GIF, final README review | - |
 
 **Future work**: Avro + Schema Registry, multi-region active-passive, waitlist for sold-out events, bot-detection signals, CDC-based outbox relay (Debezium) as an alternative implementation, per-section Redis sharding.
