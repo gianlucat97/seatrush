@@ -595,6 +595,33 @@ final class Invariants {
                       });
             });
 
+    // A hold frozen for an order nobody has: nothing will ever release it. Freezing is what hands
+    // a hold from its user to a checkout, and from there the SAGA owns it and ends it with a commit
+    // or a release (README section 9.2). The sweeper deliberately leaves a frozen hold alone, so a
+    // freeze that succeeded for a checkout that was never written leaves those seats out of the
+    // sale for good, with no deadline and no owner.
+    //
+    // The window is narrow and real. CheckoutService freezes the hold and then writes the order, so
+    // a freeze that landed while its reply was lost leaves the hold frozen for an order id that was
+    // thrown away. The load test of section 18.1 is what pointed at it: under saturation a checkout
+    // answers 503 and its retry answers 409, which is that sequence seen from the client, and
+    // nothing in this checker could tell the harmless version of it from the leaking one.
+    for (Snapshot.Hold hold : index.holds()) {
+      if (!"CHECKOUT".equals(hold.status()) || hold.orderId() == null) {
+        continue;
+      }
+      if (index.orderOf(hold.orderId()) == null) {
+        findings.violation(
+            Invariant.DEADLINES_RESPECTED,
+            "hold %s of user %s is frozen for order %s, which the order database has never heard"
+                + " of, so nothing will release seats %s",
+            hold.holdId(),
+            hold.userId(),
+            hold.orderId(),
+            hold.seatIds());
+      }
+    }
+
     Map<String, Long> inFlight = new TreeMap<>();
     for (Snapshot.Order order : snapshot.orders()) {
       Snapshot.Saga saga = order.saga();
