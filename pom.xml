@@ -54,6 +54,13 @@
          BOM, and pinned to the version Spring Security 7.0.x brings in transitively, so the
          gateway's resource server and libs/security share one implementation. -->
     <nimbus-jose-jwt.version>10.4</nimbus-jose-jwt.version>
+    <!-- The JSON Schema validator of the message contract test of README section 17. Test scope
+         only, and it brings a Jackson 2 of its own: this repository serializes with Jackson 3, so
+         the validator reads the documents with its own parser while the messages under test are
+         encoded with the mapper the services publish with. That separation is the point rather than
+         an accident, since a schema checked by the serializer that produced the bytes would agree
+         with itself. -->
+    <json-schema-validator.version>1.5.9</json-schema-validator.version>
 
     <!-- Build plugins -->
     <maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
@@ -113,6 +120,12 @@
             <artifactId>micrometer-registry-otlp</artifactId>
           </exclusion>
         </exclusions>
+      </dependency>
+      <dependency>
+        <groupId>com.networknt</groupId>
+        <artifactId>json-schema-validator</artifactId>
+        <version>${json-schema-validator.version}</version>
+        <scope>test</scope>
       </dependency>
       <dependency>
         <groupId>com.tngtech.archunit</groupId>

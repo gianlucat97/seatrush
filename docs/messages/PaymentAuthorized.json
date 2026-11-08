@@ -1,0 +1,50 @@
+{
+  "$schema" : "https://json-schema.org/draft/2020-12/schema",
+  "$id" : "https://seatrush.dev/messages/PaymentAuthorized.json",
+  "title" : "PaymentAuthorized",
+  "description" : "The PaymentAuthorized message of README section 10.3 as it appears on a topic, envelope and payload.",
+  "type" : "object",
+  "properties" : {
+    "messageId" : {
+      "type" : "string",
+      "format" : "uuid"
+    },
+    "type" : {
+      "const" : "PaymentAuthorized"
+    },
+    "schemaVersion" : {
+      "type" : "integer",
+      "minimum" : 1
+    },
+    "occurredAt" : {
+      "type" : "string",
+      "format" : "date-time"
+    },
+    "correlationId" : {
+      "type" : "string",
+      "format" : "uuid"
+    },
+    "causationId" : {
+      "type" : [ "string", "null" ],
+      "format" : "uuid"
+    },
+    "traceparent" : {
+      "type" : [ "string", "null" ]
+    },
+    "payload" : {
+      "type" : "object",
+      "properties" : {
+        "orderId" : {
+          "type" : "string",
+          "format" : "uuid"
+        },
+        "paymentOperationId" : {
+          "type" : "string",
+          "format" : "uuid"
+        }
+      },
+      "required" : [ "orderId", "paymentOperationId" ]
+    }
+  },
+  "required" : [ "messageId", "type", "schemaVersion", "occurredAt", "correlationId", "payload" ]
+}

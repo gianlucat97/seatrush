@@ -550,6 +550,8 @@ On `CommitSeats(orderId, holdId)`:
 
 ## 10. Messaging (Kafka)
 
+The JSON Schema of every message below is published under [`docs/messages/`](docs/messages/index.md), generated from the records and checked against them by the build ([§17.3](#173-the-message-schemas)).
+
 ### 10.1 Topics
 
 | Topic | Key | Partitions | Producers | Consumers | Messages |
@@ -961,7 +963,7 @@ There is no Alertmanager in the local stack. A firing rule is visible under **Al
 | Lua scripts | Testcontainers (Redis) | Every script: success, conflict, limit, idempotency, expiry edge cases |
 | Concurrency | JUnit + virtual threads + Testcontainers | e.g. 10,000 concurrent hold attempts on 100 seats → exactly 100 seats held, never more; one hold per user |
 | Integration | Testcontainers (Postgres, Redis, Kafka), Spring Boot tests | Both outbox relays, idempotent consumers, full SAGA happy path and every compensation, seat commit crash window |
-| Message contracts | JSON Schema validation | Producers emit, consumers accept, every message type in `libs/messaging` |
+| Message contracts | JSON Schema validation ([§17.3](#173-the-message-schemas)) | Every message type of `libs/messaging`: the schema matches the record, a producer's bytes satisfy it, and a consumer reads them back |
 | API | REST Assured | Contracts, error codes, idempotency behaviour, ownership checks |
 | Architecture | ArchUnit | Layering rules (domain has no framework dependency), no cross-service module dependency |
 | End-to-end | Docker Compose + REST Assured | Lobby → queue → admission → hold → checkout → ticket; sold-out notice |
@@ -1031,6 +1033,18 @@ make check CHECK_FLAGS="--postgres-port 15432 --redis-port 16379"
 **It works against either stack and detects which.** The experiments are written over five operations: crash a component, stop and start one, wait until it serves again, read a scalar out of a service's database, and run a Redis command. Each has a Compose implementation and a Kubernetes one, so the suite is the same six experiments on a laptop and on `make k8s-up`.
 
 One difference between the two is worth stating rather than hiding. In the cluster, deleting a pod is the whole experiment and the Deployment is what brings it back, which is the real behaviour. The Compose stack has no controller: `restart: unless-stopped` does not fire for a container killed through the API, which Docker counts as an explicit stop, so there the script starts the service again itself and says so on the line where it does it. What is being tested either way is the claim, which is about what the crash cost and not about who noticed.
+
+### 17.3 The message schemas
+
+`docs/messages/` holds one JSON Schema per message type of [§10.3](#103-message-types), describing the whole envelope as it appears on a topic rather than the payload alone: what a consumer reads off `inventory.replies` is an envelope, and a schema of the payload would describe a document nobody receives. `docs/messages/index.md` lists them by topic and is generated with them.
+
+They are generated from the records and committed, which only stays true if something checks it. `MessageSchemaTest` is the generator and the check in one class: without a flag it regenerates every schema and compares, so a file that has drifted fails the build and says `make message-docs`; with `-Dseatrush.messages.write=true`, which is what that target passes, it writes them instead.
+
+**The generator is written here rather than taken from a library**, for a reason that is not taste. This repository serializes with Jackson 3 (`tools.jackson`), and the schema generators read Jackson 2 annotations and build their output with Jackson 2 databind. A schema produced by a different Jackson than the one that produces the bytes describes a document that may not be the document, which is the one failure a schema must not have. Eighteen records over nine component types is the whole of what a library would do for them, and the generator **refuses a component type it does not know**: a message field of a new type fails the build rather than being described as something it is not.
+
+**Validation is the half that makes them a contract.** Every type has a sample, the catalog test already asserts that set is complete, and each sample is encoded by the codec that publishes to Kafka, validated against its schema, and decoded by the codec that consumes from it. That is the row of [§17](#17-testing-strategy) in both directions. The validator is told to assert `format`, which JSON Schema 2020-12 leaves off by default: these documents say `format: uuid` and mean it, and a consumer validating with them has the same switch to throw.
+
+**An unknown property is accepted, deliberately.** [ADR-0007](docs/adr/0007-json-messages-with-schema-version.md) is the compatibility policy: fields are added and consumers ignore what they do not know. A schema that refused one would describe a rule the services do not follow and would fail on the first additive change. There is a test for that too, so the permissiveness is a decision on the record rather than a gap.
 
 ## 18. Benchmark
 
@@ -1156,7 +1170,8 @@ seatrush/
 ├── docs/
 │   ├── adr/                        # one file per row of section 25, validated in CI
 │   ├── api/                        # generated OpenAPI specs
-│   ├── messages/                   # generated JSON Schemas of Kafka messages
+│   ├── messages/                   # JSON Schemas of the Kafka messages, generated and
+│   │                               # compared against the records by the build
 │   ├── benchmarks/
 │   └── diagrams/
 ├── scripts/                        # seed.sh, check.sh, load.sh, chaos.sh, the two
