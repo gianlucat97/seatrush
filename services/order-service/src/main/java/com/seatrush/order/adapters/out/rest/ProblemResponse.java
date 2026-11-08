@@ -2,22 +2,45 @@ package com.seatrush.order.adapters.out.rest;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.seatrush.common.error.ErrorCode;
+import java.util.UUID;
 
 /**
  * A Problem Details document as this service reads one back from another (README section 12.6).
  *
- * <p>Only the two members the checkout acts on are mapped. The rest of RFC 9457 is for a human or a
- * log line, and binding it would couple this client to fields it does not branch on.
+ * <p>Only the members the checkout acts on are mapped. The rest of RFC 9457 is for a human or a log
+ * line, and binding it would couple this client to fields it does not branch on.
  *
  * @param code the stable error code, which is the contract
  * @param detail the sentence describing this occurrence, passed through into the local exception so
  *     a log line says what inventory said
+ * @param orderId the order a hold is already frozen for, which inventory sends with {@code
+ *     HOLD_ALREADY_USED} for exactly one purpose: so the caller can tell its own retry apart from a
+ *     genuine collision. A string and not a {@link java.util.UUID}, because a malformed one is a
+ *     deployment skew to be ignored rather than a parse failure on an error path
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
-record ProblemResponse(String code, String detail) {
+record ProblemResponse(String code, String detail, String orderId) {
 
   static ProblemResponse empty() {
-    return new ProblemResponse(null, null);
+    return new ProblemResponse(null, null, null);
+  }
+
+  /**
+   * The order the hold is frozen for, or null when there is none to read.
+   *
+   * <p>Null rather than an exception for anything that is not a uuid, for the reason {@link
+   * #errorCode()} gives about an unknown code: this is an error path, and a member that cannot be
+   * read is one the caller has to carry on without.
+   */
+  UUID frozenFor() {
+    if (orderId == null || orderId.isBlank()) {
+      return null;
+    }
+    try {
+      return UUID.fromString(orderId.strip());
+    } catch (IllegalArgumentException notAUuid) {
+      return null;
+    }
   }
 
   /**

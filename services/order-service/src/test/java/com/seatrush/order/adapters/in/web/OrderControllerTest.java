@@ -100,7 +100,7 @@ class OrderControllerTest {
 
   @Test
   void aHoldAnotherOrderOwnsIsAConflict() throws Exception {
-    willThrow(new HoldAlreadyUsedException(HOLD_ID, "taken")).given(checkouts).start(any());
+    willThrow(new HoldAlreadyUsedException(HOLD_ID, null, "taken")).given(checkouts).start(any());
 
     mvc.perform(startRequest())
         .andExpect(status().isConflict())
