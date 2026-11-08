@@ -87,6 +87,14 @@ jobs:
             prom/prometheus:v3.15.1 \
             check rules /rules/expressions.yml
 
+      # The ADRs of README section 25, which fail by drifting rather than by breaking. A table row
+      # with no file is a decision somebody looked for and did not find; a file with no row is a
+      # decision nobody will ever look for. Neither breaks a build on its own, which is why the
+      # correspondence is checked in both directions here along with the four sections the section
+      # promises and the titles agreeing exactly.
+      - name: Validate the ADRs
+        run: python scripts/check-adrs.py
+
       # The Helm chart of README section 24, which fails in three quiet ways. A manifest
       # Kubernetes would reject is a release that half-applies, and the first half is
       # whichever objects sorted earlier; a chart that has drifted from the Compose stack
