@@ -21,6 +21,9 @@ final class StubInventory implements HoldFreezer {
   private FrozenHold answer;
   private RuntimeException refusal;
 
+  /** How many more freezes are refused, or -1 for all of them. */
+  private int refusalsLeft = -1;
+
   /** Answers every freeze with a hold of these seats, priced the same. */
   void answersWith(UUID holdId, UUID eventId, UUID userId, Money seatPrice, String... seatIds) {
     List<OrderItem> seats =
@@ -28,12 +31,14 @@ final class StubInventory implements HoldFreezer {
     Money total = seats.stream().map(OrderItem::price).reduce(Money::plus).orElseThrow();
     this.answer = new FrozenHold(holdId, eventId, userId, seats, total);
     this.refusal = null;
+    this.refusalsLeft = -1;
   }
 
   /** Answers with exactly this, for the tests that need a reply that does not match the request. */
   void answersWith(FrozenHold frozen) {
     this.answer = frozen;
     this.refusal = null;
+    this.refusalsLeft = -1;
   }
 
   /** Refuses every freeze. */
@@ -41,10 +46,24 @@ final class StubInventory implements HoldFreezer {
     this.refusal = refusal;
   }
 
+  /**
+   * Refuses the next freeze and answers the one after it.
+   *
+   * <p>Which is the shape of the only interesting sequence here: a retry asks for a hold that is
+   * already frozen, is told which order owns it, and asks again for that one.
+   */
+  void refusesOnceWith(RuntimeException refusal) {
+    this.refusal = refusal;
+    this.refusalsLeft = 1;
+  }
+
   @Override
   public FrozenHold freeze(UUID holdId, UUID orderId, UUID userId) {
     frozenFor.add(orderId);
-    if (refusal != null) {
+    if (refusal != null && refusalsLeft != 0) {
+      if (refusalsLeft > 0) {
+        refusalsLeft--;
+      }
       throw refusal;
     }
     if (answer == null) {

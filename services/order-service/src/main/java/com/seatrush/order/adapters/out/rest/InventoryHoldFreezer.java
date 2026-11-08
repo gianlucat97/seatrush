@@ -112,7 +112,8 @@ public class InventoryHoldFreezer implements HoldFreezer {
     }
     return switch (code) {
       case HOLD_EXPIRED -> new HoldExpiredException(holdId, problem.detailOrCode());
-      case HOLD_ALREADY_USED -> new HoldAlreadyUsedException(holdId, problem.detailOrCode());
+      case HOLD_ALREADY_USED ->
+          new HoldAlreadyUsedException(holdId, problem.frozenFor(), problem.detailOrCode());
       case NOT_FOUND -> new HoldNotFoundException(holdId);
       case FORBIDDEN -> new HoldNotOwnedException(holdId);
       default ->

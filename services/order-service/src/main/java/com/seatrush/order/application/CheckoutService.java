@@ -87,7 +87,9 @@ public class CheckoutService {
    *
    * @throws IdempotencyKeyReusedException if the key was used for a different hold
    * @throws com.seatrush.order.domain.HoldExpiredException if the hold ran out or was released
-   * @throws HoldAlreadyUsedException if another order owns the hold
+   * @throws HoldAlreadyUsedException if another order really owns the hold. A hold frozen for an
+   *     order that was never written is taken over instead, which is what makes a repeat of a
+   *     {@code 503} safe the way README section 12.6 says it is
    * @throws com.seatrush.order.domain.HoldNotFoundException if inventory has no such hold
    * @throws com.seatrush.order.domain.HoldNotOwnedException if the hold is somebody else's
    * @throws com.seatrush.order.domain.InventoryUnavailableException if inventory could not answer
@@ -101,13 +103,12 @@ public class CheckoutService {
     }
 
     // Decided here and not by the database, so the freeze can be told which order is taking the
-    // hold over before the order exists. That is what makes the freeze idempotent for a retry.
-    UUID orderId = ids.newId();
-    FrozenHold frozen = inventory.freeze(command.holdId(), orderId, command.userId());
-    requireAnswerMatchesRequest(frozen, command);
+    // hold over before the order exists.
+    Frozen frozen = freezeOrAdopt(command, ids.newId());
+    requireAnswerMatchesRequest(frozen.hold(), command);
 
     try {
-      Order order = write(command, orderId, frozen);
+      Order order = write(command, frozen.orderId(), frozen.hold());
       count("created");
       log.info(
           "order {} created for user {}, {} seats of event {} at {}",
@@ -119,6 +120,61 @@ public class CheckoutService {
       return order;
     } catch (DuplicateOrderException lostARace) {
       return resolveDuplicate(command, lostARace);
+    }
+  }
+
+  /**
+   * The hold frozen, by the order id it is actually frozen for.
+   *
+   * <p>Usually the one this call minted. Sometimes one an earlier attempt minted and never got to
+   * use, which is what {@link #freezeOrAdopt} is about.
+   */
+  private record Frozen(UUID orderId, FrozenHold hold) {}
+
+  /**
+   * Freezes the hold, and takes over an abandoned freeze rather than refusing it.
+   *
+   * <p>This is what makes the promise of README section 12.6 true. A {@code 503} there says a
+   * dependency was briefly away and the request is safe to repeat with the same {@code
+   * Idempotency-Key}, and README section 15 asks for no checkout to fail beyond client retries.
+   * Without this, both were wrong in one specific way: the freeze is idempotent for the same order
+   * id, a retry mints a new one, and so a retry of a checkout whose freeze had landed while its
+   * reply was lost asked inventory to freeze a hold that was already frozen for an id nobody kept.
+   * Inventory refused, correctly, and the client got {@code 409} to a request it had been told to
+   * repeat. The load test of section 18.1 is what found it, under enough load to produce the {@code
+   * 503} in the first place.
+   *
+   * <p>The recovery needs no new state because inventory already reports what is needed: its {@code
+   * HOLD_ALREADY_USED} carries the order the hold is frozen for, and its own exception says that
+   * member exists "so the caller can tell its own retry apart from a genuine collision". This is
+   * the caller doing that. If no order of that id exists, then the freeze outlived the attempt that
+   * made it: the order row and the freeze are the two halves of one step, the freeze comes first,
+   * and the only way to have one without the other is to have died in between. So the hold is
+   * frozen again for that id, which is the idempotent case and answers with the seats, and the
+   * order is written under it.
+   *
+   * <p>If an order of that id does exist, it owns the hold and this really is a second checkout of
+   * one hold, which is what the freeze is there to refuse. The refusal is passed on.
+   *
+   * <p>Adopting once and never in a loop. The second freeze is the idempotent case by construction,
+   * and a second refusal means the hold moved again underneath this call, which is a race to report
+   * rather than to chase.
+   */
+  private Frozen freezeOrAdopt(StartCheckoutCommand command, UUID minted) {
+    try {
+      return new Frozen(minted, inventory.freeze(command.holdId(), minted, command.userId()));
+    } catch (HoldAlreadyUsedException alreadyFrozen) {
+      UUID abandoned = alreadyFrozen.frozenFor();
+      if (abandoned == null || orders.findById(abandoned).isPresent()) {
+        throw alreadyFrozen;
+      }
+      count("adopted");
+      log.warn(
+          "hold {} is frozen for order {}, which no order owns: an earlier attempt died between "
+              + "the freeze and its order, so this checkout takes that order id over",
+          command.holdId(),
+          abandoned);
+      return new Frozen(abandoned, inventory.freeze(command.holdId(), abandoned, command.userId()));
     }
   }
 
@@ -190,7 +246,10 @@ public class CheckoutService {
       return sameRequestOrRefuse(winner.get(), command);
     }
     count("hold-taken");
-    throw new HoldAlreadyUsedException(command.holdId(), "another order was created for this hold");
+    // No order to name: the one that took the hold committed under an idempotency key that is not
+    // this request's, and pointing a client at it would be answering a question it did not ask.
+    throw new HoldAlreadyUsedException(
+        command.holdId(), null, "another order was created for this hold");
   }
 
   /**

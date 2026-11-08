@@ -237,6 +237,29 @@ class CheckoutIT {
   }
 
   /**
+   * The retry of README section 12.6, end to end over HTTP and a real Postgres.
+   *
+   * <p>The sequence is a checkout whose freeze landed while its reply was lost: no order was
+   * written, and the hold is left frozen for an id nobody kept. The repeat the contract invites is
+   * told which order that is, finds no such order, and takes the id over rather than being refused.
+   * Before this it was answered 409 and the checkout was lost for good.
+   */
+  @Test
+  void aRepeatedCheckoutTakesOverAFreezeWhoseOrderWasNeverWritten() {
+    UUID abandoned = UUID.fromString("0199c5f0-6666-7000-8000-00000000f006");
+    inventory.refusesOnceAsFrozenFor(abandoned, holdId, EVENT_ID, userId, 4500L, "A-1-1", "A-1-2");
+
+    UUID orderId = checkouts.start(command(UUID.randomUUID())).id();
+
+    assertThat(orderId).isEqualTo(abandoned);
+    assertThat(orderCount()).isEqualTo(1);
+    assertThat(orders.get(orderId, userId).order().status()).isEqualTo(OrderStatus.PENDING);
+    // Two calls: the id this attempt minted, then the one the hold already carried.
+    assertThat(inventory.callCount()).isEqualTo(2);
+    assertThat(inventory.requestBodies().get(1)).contains(abandoned.toString());
+  }
+
+  /**
    * Many requests carrying one idempotency key, which is a client retrying faster than this service
    * answers. Exactly one order may exist, and the losers either get it or are told the hold is
    * taken; neither answer may be a second order.

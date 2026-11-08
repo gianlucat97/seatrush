@@ -2,6 +2,7 @@ package com.seatrush.order.adapters.out.rest;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.InstanceOfAssertFactories.type;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
@@ -109,6 +110,45 @@ class InventoryHoldFreezerTest {
     assertThatThrownBy(() -> freezer.freeze(HOLD_ID, ORDER_ID, USER_ID))
         .isInstanceOf(HoldAlreadyUsedException.class)
         .hasMessageContaining("Another order has it");
+  }
+
+  /**
+   * The member that makes the retry of README section 12.6 possible, read off the wire.
+   *
+   * <p>Inventory sends the order a hold is frozen for with every {@code HOLD_ALREADY_USED}, and
+   * {@code CheckoutService} is the thing that acts on it. Until this test it was the one field this
+   * adapter dropped on the floor, which is what made a repeated checkout answer 409.
+   */
+  @Test
+  void readsTheOrderAHoldIsFrozenForOffTheRefusal() {
+    UUID frozenFor = UUID.fromString("0199c5f0-6666-7000-8000-00000000f006");
+    respondWith(
+        withStatus(HttpStatus.CONFLICT)
+            .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+            .body(
+                """
+                {"type":"urn:seatrush:error:x","title":"t","status":409,
+                 "detail":"This hold is being used by another order",
+                 "code":"HOLD_ALREADY_USED","orderId":"%s"}
+                """
+                    .formatted(frozenFor)));
+
+    assertThatThrownBy(() -> freezer.freeze(HOLD_ID, ORDER_ID, USER_ID))
+        .isInstanceOf(HoldAlreadyUsedException.class)
+        .asInstanceOf(type(HoldAlreadyUsedException.class))
+        .extracting(HoldAlreadyUsedException::frozenFor)
+        .isEqualTo(frozenFor);
+  }
+
+  /** A refusal with no such member is still a refusal, and says so by naming no order. */
+  @Test
+  void aRefusalWithoutTheOrderIdNamesNoOrder() {
+    respondWith(problem(HttpStatus.CONFLICT, "HOLD_ALREADY_USED", "Another order has it"));
+
+    assertThatThrownBy(() -> freezer.freeze(HOLD_ID, ORDER_ID, USER_ID))
+        .asInstanceOf(type(HoldAlreadyUsedException.class))
+        .extracting(HoldAlreadyUsedException::frozenFor)
+        .isNull();
   }
 
   @Test

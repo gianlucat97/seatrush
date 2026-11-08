@@ -74,6 +74,25 @@ public final class StubInventoryServer {
                 holdId, eventId, userId, UUID.randomUUID(), seats, centsPerSeat * seatIds.length);
   }
 
+  /**
+   * Refuses the next freeze with {@code HOLD_ALREADY_USED} naming this order, then answers.
+   *
+   * <p>Which is the sequence of README section 12.6 seen from this side: a checkout whose freeze
+   * landed while its reply was lost leaves the hold frozen for an order id nobody kept, and the
+   * retry is told which one before it asks again for that one.
+   */
+  public void refusesOnceAsFrozenFor(
+      UUID orderId, UUID holdId, UUID eventId, UUID userId, long centsPerSeat, String... seatIds) {
+    freezes(holdId, eventId, userId, centsPerSeat, seatIds);
+    this.nextBody =
+        """
+        {"type":"urn:seatrush:error:x","title":"t","status":409,
+         "detail":"This hold is being used by another order",
+         "code":"HOLD_ALREADY_USED","orderId":"%s"}"""
+            .formatted(orderId);
+    this.nextStatus = 409;
+  }
+
   /** Refuses every freeze with a Problem Details document carrying this code. */
   public void refuses(int httpStatus, String code, String detail) {
     this.status = httpStatus;
@@ -96,6 +115,11 @@ public final class StubInventoryServer {
     requestBodies.clear();
   }
 
+  /** The answer for the next call alone, or null when every call gets the same one. */
+  private String nextBody;
+
+  private int nextStatus;
+
   private void handle(com.sun.net.httpserver.HttpExchange exchange) throws IOException {
     try (exchange) {
       byte[] request = exchange.getRequestBody().readAllBytes();
@@ -103,11 +127,23 @@ public final class StubInventoryServer {
         requestBodies.add(new String(request, StandardCharsets.UTF_8));
       }
 
-      byte[] answer = body.getBytes(StandardCharsets.UTF_8);
+      String answerBody = body;
+      int answerStatus = status;
+      synchronized (requestBodies) {
+        if (nextBody != null) {
+          answerBody = nextBody;
+          answerStatus = nextStatus;
+          nextBody = null;
+        }
+      }
+
+      byte[] answer = answerBody.getBytes(StandardCharsets.UTF_8);
       exchange
           .getResponseHeaders()
-          .add("Content-Type", status == 200 ? "application/json" : "application/problem+json");
-      exchange.sendResponseHeaders(status, answer.length);
+          .add(
+              "Content-Type",
+              answerStatus == 200 ? "application/json" : "application/problem+json");
+      exchange.sendResponseHeaders(answerStatus, answer.length);
       try (OutputStream out = exchange.getResponseBody()) {
         out.write(answer);
       }

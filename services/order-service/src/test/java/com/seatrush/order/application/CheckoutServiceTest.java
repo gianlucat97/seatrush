@@ -237,6 +237,85 @@ class CheckoutServiceTest {
         .isEqualTo(1.0);
   }
 
+  /**
+   * The promise of README section 12.6, which was not kept before this.
+   *
+   * <p>A {@code 503} says the request is safe to repeat with the same key. The repeat mints a new
+   * order id, the freeze is idempotent for the same id and not for the same request, and so the
+   * repeat asked inventory to freeze a hold that was already frozen for an id the dead attempt
+   * never used. The answer was {@code 409} to a request the client had been told to retry.
+   */
+  @Test
+  void takesOverAFreezeWhoseOrderWasNeverWritten() {
+    UUID abandoned = UUID.fromString("0199c5f0-6666-7000-8000-00000000f006");
+    inventory.answersWith(HOLD_ID, EVENT_ID, USER_ID, SEAT, "A-1-1");
+    inventory.refusesOnceWith(
+        new HoldAlreadyUsedException(HOLD_ID, abandoned, "being used by another order"));
+
+    Order order = checkouts.start(command());
+
+    assertThat(order.id()).isEqualTo(abandoned);
+    assertThat(order.status()).isEqualTo(OrderStatus.PENDING);
+    // Asked twice: once for the id this attempt minted, then for the one the hold already carried.
+    assertThat(inventory.frozenFor()).hasSize(2);
+    assertThat(inventory.frozenFor().get(1)).isEqualTo(abandoned);
+    assertThat(meters.counter("seatrush.checkout.started", "result", "adopted").count())
+        .isEqualTo(1.0);
+  }
+
+  /** And once taken over, it is an ordinary order: the key replays it like any other. */
+  @Test
+  void theTakenOverOrderIsWhatTheKeyAnswersWithAfterwards() {
+    UUID abandoned = UUID.fromString("0199c5f0-6666-7000-8000-00000000f006");
+    inventory.answersWith(HOLD_ID, EVENT_ID, USER_ID, SEAT, "A-1-1");
+    inventory.refusesOnceWith(
+        new HoldAlreadyUsedException(HOLD_ID, abandoned, "being used by another order"));
+    checkouts.start(command());
+
+    Order replayed = checkouts.start(command());
+
+    assertThat(replayed.id()).isEqualTo(abandoned);
+  }
+
+  /**
+   * The case the refusal is actually for: an order of that id exists, so it owns the hold and this
+   * is a second checkout of one hold.
+   */
+  @Test
+  void aHoldOwnedByAnOrderThatExistsIsStillRefused() {
+    inventory.answersWith(HOLD_ID, EVENT_ID, USER_ID, SEAT, "A-1-1");
+    Order owner = checkouts.start(command());
+    inventory.refusesWith(
+        new HoldAlreadyUsedException(HOLD_ID, owner.id(), "being used by another order"));
+
+    assertThatThrownBy(() -> checkouts.start(command(UUID.randomUUID())))
+        .isInstanceOf(HoldAlreadyUsedException.class);
+  }
+
+  /** A refusal that names no order cannot be told apart from a collision, so it is passed on. */
+  @Test
+  void aRefusalWithNoOrderIdIsPassedOn() {
+    inventory.refusesWith(new HoldAlreadyUsedException(HOLD_ID, null, "being used"));
+
+    assertThatThrownBy(() -> checkouts.start(command()))
+        .isInstanceOf(HoldAlreadyUsedException.class);
+
+    assertThat(inventory.frozenFor()).hasSize(1);
+  }
+
+  /** Once and never in a loop: a hold that moved again underneath the retry is a race to report. */
+  @Test
+  void adoptsOnlyOnce() {
+    UUID abandoned = UUID.fromString("0199c5f0-6666-7000-8000-00000000f006");
+    inventory.refusesWith(
+        new HoldAlreadyUsedException(HOLD_ID, abandoned, "being used by another order"));
+
+    assertThatThrownBy(() -> checkouts.start(command()))
+        .isInstanceOf(HoldAlreadyUsedException.class);
+
+    assertThat(inventory.frozenFor()).hasSize(2);
+  }
+
   @Test
   void createsNothingWhenTheHoldIsGone() {
     inventory.refusesWith(new HoldExpiredException(HOLD_ID, "expired"));
@@ -289,7 +368,12 @@ class CheckoutServiceTest {
   }
 
   private StartCheckoutCommand command() {
-    return new StartCheckoutCommand(USER_ID, HOLD_ID, KEY);
+    return command(KEY);
+  }
+
+  /** The same request under a different idempotency key, which is a different client attempt. */
+  private StartCheckoutCommand command(UUID key) {
+    return new StartCheckoutCommand(USER_ID, HOLD_ID, key);
   }
 
   /** An order already in the store, as a concurrent winner would have left it. */
