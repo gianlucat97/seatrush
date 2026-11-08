@@ -1154,13 +1154,13 @@ seatrush/
 │   ├── grafana/dashboards/         # read by the Compose stack and by the cluster alike
 │   └── prometheus/                 # scrape config of the local stack, and the alert rules
 ├── docs/
-│   ├── adr/
+│   ├── adr/                        # one file per row of section 25, validated in CI
 │   ├── api/                        # generated OpenAPI specs
 │   ├── messages/                   # generated JSON Schemas of Kafka messages
 │   ├── benchmarks/
 │   └── diagrams/
 ├── scripts/                        # seed.sh, check.sh, load.sh, chaos.sh, the two
-│                                   # k8s scripts, the CI validators
+│                                   # k8s scripts, the three CI validators
 ├── .github/workflows/
 │   ├── ci.yml                      # format check, build, unit + integration tests, ArchUnit
 │   └── images.yml                  # build and push container images on tag
@@ -1892,31 +1892,33 @@ queue.
 
 ## 25. Architecture Decision Records
 
-ADRs live in `docs/adr/` using the format *Context → Decision → Consequences → Alternatives considered*.
+ADRs live in `docs/adr/` using the format *Context → Decision → Consequences → Alternatives considered*, one file per row of the table below. Each one also carries the status of the decision and the milestone it was taken in, and links back to the sections of this document it is about.
+
+The table is the index and nothing keeps an index honest by itself, so `scripts/check-adrs.py` is part of CI: every row has a file and every file has a row, the titles agree exactly, each link points at the file it names, and every ADR has the four sections and is not an empty heading. A decision recorded nowhere and a record of no decision are both quiet failures, and they are the two this section is prone to.
 
 | ADR | Title |
 |-----|-------|
-| 0001 | Orchestrated SAGA instead of choreography for checkout |
-| 0002 | Redis Lua scripts as hold fast path, Postgres primary key as final overselling guard |
-| 0003 | Transactional outbox with polling relay (instead of CDC) |
-| 0004 | Waiting room: randomized lobby + FIFO queue with sequence counter and rate-based admission |
-| 0005 | Server-Sent Events instead of WebSocket for server push |
-| 0006 | Database per service |
-| 0007 | JSON messages with explicit schema version; Avro deferred |
-| 0008 | Hold expiry via sorted-set sweeper instead of keyspace notifications |
-| 0009 | `CommitSeats` as pivot transaction; no deadline after the pivot command is sent |
-| 0010 | Hexagonal package structure enforced with ArchUnit |
-| 0011 | Redis Streams as outbox for events originating in Lua scripts |
-| 0012 | One active hold per user per event |
-| 0013 | Synchronous hold freeze at order creation |
-| 0014 | Admission as a signed bearer token instead of a lookup against queue-service |
-| 0015 | The lobby opens on inventory's sale status, never on queue-service's own clock |
-| 0016 | Admission tokens minted on read from the slot that backs them, never stored |
-| 0017 | Infrastructure as templates of the chart instead of community charts or operators |
-| 0018 | Three autoscaling signals: CPU, SSE connections per pod, Kafka consumer lag |
-| 0019 | The observability stack as an add-on of the cluster, not a subchart of the release |
-| 0020 | Readiness on this pod's own machinery, never on a shared store |
-| 0021 | The invariant checker reads the stores directly and spells their keys and columns itself |
+| 0001 | [Orchestrated SAGA instead of choreography for checkout](docs/adr/0001-orchestrated-saga-for-checkout.md) |
+| 0002 | [Redis Lua scripts as hold fast path, Postgres primary key as final overselling guard](docs/adr/0002-lua-fast-path-postgres-final-guard.md) |
+| 0003 | [Transactional outbox with polling relay (instead of CDC)](docs/adr/0003-transactional-outbox-with-polling-relay.md) |
+| 0004 | [Waiting room: randomized lobby + FIFO queue with sequence counter and rate-based admission](docs/adr/0004-randomized-lobby-and-fifo-queue.md) |
+| 0005 | [Server-Sent Events instead of WebSocket for server push](docs/adr/0005-sse-instead-of-websocket.md) |
+| 0006 | [Database per service](docs/adr/0006-database-per-service.md) |
+| 0007 | [JSON messages with explicit schema version; Avro deferred](docs/adr/0007-json-messages-with-schema-version.md) |
+| 0008 | [Hold expiry via sorted-set sweeper instead of keyspace notifications](docs/adr/0008-hold-expiry-via-sweeper.md) |
+| 0009 | [`CommitSeats` as pivot transaction; no deadline after the pivot command is sent](docs/adr/0009-commitseats-as-pivot-transaction.md) |
+| 0010 | [Hexagonal package structure enforced with ArchUnit](docs/adr/0010-hexagonal-structure-enforced-with-archunit.md) |
+| 0011 | [Redis Streams as outbox for events originating in Lua scripts](docs/adr/0011-redis-streams-as-outbox-for-lua-events.md) |
+| 0012 | [One active hold per user per event](docs/adr/0012-one-active-hold-per-user-per-event.md) |
+| 0013 | [Synchronous hold freeze at order creation](docs/adr/0013-synchronous-hold-freeze-at-order-creation.md) |
+| 0014 | [Admission as a signed bearer token instead of a lookup against queue-service](docs/adr/0014-admission-as-a-signed-bearer-token.md) |
+| 0015 | [The lobby opens on inventory's sale status, never on queue-service's own clock](docs/adr/0015-the-lobby-opens-on-inventorys-sale-status.md) |
+| 0016 | [Admission tokens minted on read from the slot that backs them, never stored](docs/adr/0016-admission-tokens-minted-on-read.md) |
+| 0017 | [Infrastructure as templates of the chart instead of community charts or operators](docs/adr/0017-infrastructure-as-templates-of-the-chart.md) |
+| 0018 | [Three autoscaling signals: CPU, SSE connections per pod, Kafka consumer lag](docs/adr/0018-three-autoscaling-signals.md) |
+| 0019 | [The observability stack as an add-on of the cluster, not a subchart of the release](docs/adr/0019-observability-as-a-cluster-add-on.md) |
+| 0020 | [Readiness on this pod's own machinery, never on a shared store](docs/adr/0020-readiness-on-this-pods-own-machinery.md) |
+| 0021 | [The invariant checker reads the stores directly and spells their keys and columns itself](docs/adr/0021-invariant-checker-reads-the-stores-directly.md) |
 
 ## 26. Roadmap
 
