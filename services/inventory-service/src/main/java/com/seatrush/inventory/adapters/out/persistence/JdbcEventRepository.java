@@ -7,6 +7,7 @@ import com.seatrush.inventory.domain.EventStatus;
 import com.seatrush.inventory.domain.Section;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -93,6 +94,24 @@ public class JdbcEventRepository implements EventRepository {
             ORDER BY on_sale_at, created_at
             """)
         .param("status", status.name())
+        .query(JdbcEventRepository::readEvent)
+        .list();
+  }
+
+  @Override
+  public List<Event> findDueToOpen(Instant now, int limit) {
+    return jdbc.sql(
+            """
+            SELECT id, name, on_sale_at, status, created_at
+            FROM event
+            WHERE status = :scheduled AND on_sale_at <= :now
+            ORDER BY on_sale_at, created_at
+            LIMIT :limit
+            FOR UPDATE SKIP LOCKED
+            """)
+        .param("scheduled", EventStatus.SCHEDULED.name())
+        .param("now", Timestamp.from(now))
+        .param("limit", limit)
         .query(JdbcEventRepository::readEvent)
         .list();
   }

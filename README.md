@@ -195,6 +195,7 @@ Owns events, venue layout, seat state, holds and the final record of sales.
 
 - **Catalog**: events, sections, seats, plus a generator that creates a venue layout of configurable size for demos and benchmarks.
 - **On-sale warm-up**: when an event is opened for sale, its seat map is loaded from Postgres into Redis (all seats `AVAILABLE`, except those already in `seat_sale`). Holds are refused for events that are not `ON_SALE`.
+- **Opening the doors**: a `SCHEDULED` event whose `onSaleAt` has passed is moved to `ON_SALE` on a schedule, so a sale announced for a moment opens at that moment without anybody acting. The seat map is warmed up first and the status moves second, never the other way round, because a hold is only accepted for an event that is `ON_SALE` and there must be no instant in which buyers are let at a seat map that is not there. That order is also why the pass claims the rows it opens with `FOR UPDATE SKIP LOCKED` rather than running freely on every pod: two pods opening one sale would both warm up, and the loser's warm-up landing after the winner's status change would wipe holds buyers had already taken. The admin endpoint of [§12.2](#122-events-and-seat-map) still forces a sale open for demos and benchmarks, which is a different thing and deliberately so.
 - **Holds**: atomic hold of 1..N seats (max configurable, default 6) via a Redis Lua script. All-or-nothing: if any seat is unavailable, nothing is held. A user can have only one active hold per event (I8).
 - **Hold expiry**: a sweeper releases expired holds (see [§9.3](#93-hold-expiry)).
 - **Freeze**: synchronous internal endpoint called by order-service; moves the hold from `ACTIVE` to `CHECKOUT` and returns the seats with their prices.
@@ -843,6 +844,7 @@ Every meter carries a **`service` label**, set from `spring.application.name` by
 | `seatrush_seats_capacity{event}` | gauge | Seats the venue of a live sale has, read once per event |
 | `seatrush_oversell_prevented_total` | counter | Sales rejected by the Postgres guard (must be 0) |
 | `seatrush_redis_reconciliations_total` | counter | Seats fixed in Redis by the reconciler |
+| `seatrush_sales_opened_total` | counter | Sales whose doors this pod opened when their moment came |
 | `seatrush_seat_events_relayed_total` | counter | Seat events moved from the Redis stream to Kafka |
 | `seatrush_checkout_started_total{result}` | counter | Checkout attempts, including the ones refused before a SAGA existed |
 | `seatrush_saga_duration_seconds{outcome}` | histogram | End-to-end checkout duration |
@@ -1241,6 +1243,8 @@ Main properties (all overridable via environment variables):
 | `seatrush.hold.max-seats` | inventory | `6` | Max seats per hold |
 | `seatrush.hold.sweeper-interval` | inventory | `1s` | Expiry sweeper period |
 | `seatrush.hold.sweeper-batch-size` | inventory | `500` | Holds expired per sweep |
+| `seatrush.sale-opener.interval` | inventory | `1s` | How often the catalog is asked whether a scheduled sale is due, which with the queue's catalog refresh below is how late a sale can open |
+| `seatrush.sale-opener.batch-size` | inventory | `20` | Due sales opened per pass, which bounds the transaction that claims them |
 | `seatrush.reconciler.interval` | inventory | `30s` | Redis/Postgres reconciliation period |
 | `seatrush.reconciler.batch-size` | inventory | `500` | Frozen holds examined per event per pass |
 | `seatrush.admission.rate-per-second` | queue | `500` | Users admitted per second per event |

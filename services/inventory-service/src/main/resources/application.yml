@@ -63,6 +63,15 @@ seatrush:
     # abandoned hold are back almost immediately.
     sweeper-interval: ${SEATRUSH_HOLD_SWEEPER_INTERVAL:1s}
     sweeper-batch-size: ${SEATRUSH_HOLD_SWEEPER_BATCH_SIZE:500}
+  sale-opener:
+    # How often the catalog is asked whether a sale is due, which is also how late a sale can
+    # open (README sections 6.3 and 22). One second, because this is the figure a flash on-sale
+    # is organised around: the lobby is drawn in a random order the instant the doors open, so
+    # a late opening treats everybody waiting equally, but a minute of it would be a minute of
+    # a published start time being wrong.
+    interval: ${SEATRUSH_SALE_OPENER_INTERVAL:1s}
+    # A pass holds a row lock while it warms Redis up, so it takes a few sales and not a catalog.
+    batch-size: ${SEATRUSH_SALE_OPENER_BATCH_SIZE:20}
   reconciler:
     # The window of README section 9.6 step 5: a pod that died between the sale and the seat map.
     # Seconds and not milliseconds, because nothing is wrong while this waits, the seats are

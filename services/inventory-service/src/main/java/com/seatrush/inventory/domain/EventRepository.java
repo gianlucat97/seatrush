@@ -1,5 +1,6 @@
 package com.seatrush.inventory.domain;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -33,6 +34,25 @@ public interface EventRepository {
    * opened a second ago has holds that will expire like any other.
    */
   List<Event> findByStatus(EventStatus status);
+
+  /**
+   * The scheduled sales whose moment has come, claimed for this caller alone.
+   *
+   * <p>Claimed, and that is the whole reason this is not {@code findByStatus(SCHEDULED)} filtered
+   * in memory. Opening a sale is warming Redis up and then moving the status, in that order and
+   * never the other way round (README section 6.3), and two pods doing it at once is the one
+   * interleaving that breaks: the loser's warm-up can land after the winner's status change, which
+   * would wipe the holds buyers had already taken in the moment between. So the row is locked for
+   * the transaction that opens it and skipped by everyone else, the way the outbox relay and the
+   * SAGA scheduler of README section 9.7 claim their work.
+   *
+   * <p>Only callable inside a transaction, because that is what the lock lives for.
+   *
+   * @param now the instant to judge {@code on_sale_at} against, from the injected clock
+   * @param limit how many to claim in one pass, so a catalog of a thousand due sales is not one
+   *     transaction
+   */
+  List<Event> findDueToOpen(Instant now, int limit);
 
   List<Section> findSections(UUID eventId);
 
