@@ -23,10 +23,18 @@ import java.util.regex.Pattern;
  * 12.2, because that is what generates the layout and what the Redis warm-up hangs off. A benchmark
  * that inserted rows would be measuring a sale that never opened.
  *
- * <p>{@code onSaleAt} is set a known distance into the future rather than opened by hand, so the
- * lobby fills while the sale is still shut and opens by itself when the clock says so. That is the
- * flash on-sale of README section 1: the moment the doors open is the moment the load arrives, and
- * an opener that posted to the admin endpoint mid-run would be a second thing deciding when.
+ * <p>Both sales are scheduled out of the sale opener's reach, which is the one decision here worth
+ * reading twice. {@code DRAFT} to {@code SCHEDULED} is what opens the lobby (ADR-0015), so a sale
+ * whose {@code onSaleAt} is hours out still fills; what it does not do is open itself. The run
+ * opens the one being bought from with a request of its own, for the reason {@link
+ * OnSaleSimulation} gives about its opener: a benchmark wants the instant it starts measuring from
+ * to be a request it made.
+ *
+ * <p>It used to be scheduled {@code lobbySeconds} out, which is the same instant the opener fires
+ * at, so the sale opener of README section 6.3 and the opener of this simulation raced for it and
+ * the loser was answered {@code 400}. One request nobody designed for is enough to fail the single
+ * assertion every run of this simulation is gated on, which made a clean run a coin toss and is why
+ * the clock is now kept out of it entirely.
  *
  * <p>The event id is written to a file as well as returned, because the run is only half of {@code
  * make load-small}: the invariant checker of README section 17.1 is the other half, and it has to
@@ -58,7 +66,7 @@ record BenchmarkSale(UUID eventId, Instant onSaleAt, UUID lobbyEventId) {
 
   private static final Duration TIMEOUT = Duration.ofSeconds(20);
 
-  /** How far out the lobby-only sale is scheduled: long enough that it never opens mid-run. */
+  /** How far out a sale is scheduled when nothing but the run is allowed to open it. */
   private static final Duration NEVER_DURING_THIS_RUN = Duration.ofHours(4);
 
   /** The lobby-only sale needs a venue because every event does. Nothing ever buys from it. */
@@ -79,10 +87,10 @@ record BenchmarkSale(UUID eventId, Instant onSaleAt, UUID lobbyEventId) {
       Pattern.compile("\"accessToken\"\\s*:\\s*\"([^\"]+)\"");
 
   /**
-   * Logs in as an operator, creates the venue, and schedules the sale.
+   * Logs in as an operator, creates the two venues, and schedules both sales.
    *
    * <p>Scheduled and not opened: {@code DRAFT} to {@code SCHEDULED} is what opens the lobby, and
-   * from there the sale opens on its own clock.
+   * neither sale is due for hours, so the only thing that can open one is the run.
    *
    * @throws IllegalStateException if any step fails, naming the response, because every one of them
    *     is a reason the run cannot happen at all
@@ -94,7 +102,7 @@ record BenchmarkSale(UUID eventId, Instant onSaleAt, UUID lobbyEventId) {
             .followRedirects(HttpClient.Redirect.NEVER)
             .build()) {
       String token = login(client, profile);
-      Instant onSaleAt = Instant.now().plus(profile.lobbySeconds());
+      Instant onSaleAt = Instant.now().plus(NEVER_DURING_THIS_RUN);
       UUID eventId = createEvent(client, profile, token, onSaleAt, venue.sectionsJson());
       schedule(client, profile, token, eventId);
       UUID lobbyEventId =

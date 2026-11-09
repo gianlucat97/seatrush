@@ -22,8 +22,9 @@ import java.util.regex.Pattern;
  * @param sections how many sections the venue has, each one a rectangle of rows by seatsPerRow
  * @param lobbyUsers buyers who are already waiting when the sale opens
  * @param arrivingUsers buyers who join after it has opened
- * @param lobbySeconds how long the lobby is given to fill before the sale opens, which is also what
- *     {@code onSaleAt} is set to
+ * @param lobbySeconds how long the lobby is given to fill before the run opens the sale itself.
+ *     {@code onSaleAt} is hours out and deliberately unrelated to it, so the sale opener of README
+ *     section 6.3 is not a second thing deciding when a run starts ({@link BenchmarkSale})
  * @param arrivalWindow how long the late arrivals take to all have joined
  * @param spectators clients watching the seat map and buying nothing
  * @param watchers clients waiting on the pushed stream of the waiting room and buying nothing

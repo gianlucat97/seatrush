@@ -98,7 +98,9 @@ public class OnSaleSimulation extends Simulation {
   public void before() {
     System.out.print(profile.describe());
     sale = BenchmarkSale.open(profile, venue);
-    System.out.printf("  sale       %s opens at %s%n", sale.eventId(), sale.onSaleAt());
+    System.out.printf(
+        "  sale       %s, opened by this run after %s and due at %s%n",
+        sale.eventId(), profile.lobbySeconds(), sale.onSaleAt());
     System.out.printf("  lobby      %s, which never opens%n%n", sale.lobbyEventId());
   }
 
@@ -305,6 +307,11 @@ public class OnSaleSimulation extends Simulation {
    * section 6.3 now does it on the clock, within its interval of {@code onSaleAt}. This scenario
    * stays because the reason above is the real one: a benchmark wants the instant it starts
    * measuring from to be a request it made, not a poll somewhere else that happened to notice.
+   *
+   * <p>Which is also why {@link BenchmarkSale} schedules the sale hours out. The two openers used
+   * to be due at the same instant and raced, and the one that lost was answered {@code 400}. The
+   * status is checked and not tolerated on purpose: with the clock out of reach, anything but
+   * {@code 200} here means a second thing decided when this run started.
    */
   private final ScenarioBuilder opener =
       scenario("opener")

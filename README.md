@@ -1200,10 +1200,12 @@ seatrush/
 │   │                               # the running service and compared against it by the build
 │   ├── messages/                   # JSON Schemas of the Kafka messages, generated and
 │   │                               # compared against the records by the build
-│   ├── benchmarks/
+│   ├── benchmarks/                 # one directory per published run of section 18.3,
+│   │                               # collected by scripts/publish-run.sh
 │   └── diagrams/
-├── scripts/                        # seed.sh, check.sh, load.sh, chaos.sh, the two
-│                                   # k8s scripts, the three CI validators
+├── scripts/                        # seed.sh, check.sh, load.sh, chaos.sh, publish-run.sh
+│                                   # and the readings it takes, the two k8s scripts,
+│                                   # the three CI validators
 ├── .github/workflows/
 │   ├── ci.yml                      # format check, build, unit + integration tests, ArchUnit
 │   └── images.yml                  # build and push container images on tag
