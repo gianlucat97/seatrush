@@ -13,7 +13,7 @@ COMPOSE ?= docker compose --file $(COMPOSE_FILE) --env-file .env
 .DEFAULT_GOAL := help
 .PHONY: help format build test-it clean up down images seed ui ui-build
 .PHONY: k8s-up k8s-down k8s-seed k8s-status k8s-template load-small load-full
-.PHONY: chaos check
+.PHONY: chaos check message-docs
 .PHONY: k8s-observability k8s-hpa k8s-grafana
 
 # The frontend is a Node project rather than a Maven module, so it has its own
@@ -145,6 +145,14 @@ EXPERIMENTS ?=
 
 chaos: ## Break the things README section 16 makes a promise about, then check the invariants
 	@./scripts/chaos.sh $(EXPERIMENTS)
+
+# The generator is the test that checks them, so one message type has one description and not two.
+# Without the write flag the same test compares instead of writing, which is what makes a schema
+# that has drifted a failed build (README section 17).
+MESSAGE_DOCS_FLAGS = -Dtest=MessageSchemaTest -Dsurefire.failIfNoSpecifiedTests=false -Dseatrush.messages.write=true
+
+message-docs: ## Regenerate the JSON Schemas of docs/messages/ from the message records
+	$(MVNW) $(MAVEN_FLAGS) -pl libs/messaging -am -DskipITs $(MESSAGE_DOCS_FLAGS) test
 
 # Flags for the run, since every one of them has a default that fits the local stack:
 #   make check CHECK_FLAGS="--settle-timeout 0"      look at a sale that is still running

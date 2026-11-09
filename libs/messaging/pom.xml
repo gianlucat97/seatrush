@@ -147,6 +147,14 @@
       <artifactId>postgresql</artifactId>
       <scope>test</scope>
     </dependency>
+    <!-- The message contract test of README section 17: it validates every sample message against
+         the schema generated from its record, which is what makes docs/messages/ a contract rather
+         than a description. -->
+    <dependency>
+      <groupId>com.networknt</groupId>
+      <artifactId>json-schema-validator</artifactId>
+    </dependency>
+
   </dependencies>
 
   <build>
