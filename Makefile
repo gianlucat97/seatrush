@@ -13,7 +13,7 @@ COMPOSE ?= docker compose --file $(COMPOSE_FILE) --env-file .env
 .DEFAULT_GOAL := help
 .PHONY: help format build test-it clean up down images seed ui ui-build
 .PHONY: k8s-up k8s-down k8s-seed k8s-status k8s-template load-small load-full
-.PHONY: chaos check message-docs
+.PHONY: chaos check message-docs api-docs
 .PHONY: k8s-observability k8s-hpa k8s-grafana
 
 # The frontend is a Node project rather than a Maven module, so it has its own
@@ -153,6 +153,17 @@ MESSAGE_DOCS_FLAGS = -Dtest=MessageSchemaTest -Dsurefire.failIfNoSpecifiedTests=
 
 message-docs: ## Regenerate the JSON Schemas of docs/messages/ from the message records
 	$(MVNW) $(MAVEN_FLAGS) -pl libs/messaging -am -DskipITs $(MESSAGE_DOCS_FLAGS) test
+
+# The other half of README section 17.4, and the one that needs Docker: each document is asked of
+# its own service while that service is running, so what is published is what a pod serves rather
+# than what a reflection pass believes. Unit tests are off and one integration test per service is
+# on, which is why both failIfNoSpecifiedTests flags are here: every module of the reactor is
+# visited and only six of them have an OpenApiIT.
+API_DOCS_FLAGS = -Dtest=none -Dsurefire.failIfNoSpecifiedTests=false \
+	-Dit.test=OpenApiIT -Dfailsafe.failIfNoSpecifiedTests=false -Dseatrush.api.write=true
+
+api-docs: ## Regenerate the OpenAPI documents of docs/api/ from the six services
+	$(MVNW) $(MAVEN_FLAGS) $(API_DOCS_FLAGS) verify
 
 # Flags for the run, since every one of them has a default that fits the local stack:
 #   make check CHECK_FLAGS="--settle-timeout 0"      look at a sale that is still running

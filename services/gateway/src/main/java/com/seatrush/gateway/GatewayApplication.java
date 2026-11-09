@@ -2,6 +2,9 @@ package com.seatrush.gateway;
 
 import com.seatrush.security.config.AdmissionTokenConfiguration;
 import com.seatrush.security.config.UserTokenConfiguration;
+import io.swagger.v3.oas.annotations.OpenAPIDefinition;
+import io.swagger.v3.oas.annotations.info.Info;
+import io.swagger.v3.oas.annotations.servers.Server;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
@@ -28,6 +31,22 @@ import org.springframework.context.annotation.Import;
 @SpringBootApplication
 @ConfigurationPropertiesScan
 @Import({UserTokenConfiguration.class, AdmissionTokenConfiguration.class})
+// The document served at /v3/api-docs and published as docs/api/gateway.yaml. The
+// server is relative on purpose: left unset springdoc fills it in from the request that asked,
+// which is a different address in Compose, in the cluster and in the test that publishes this
+// file, and a published contract should not name whichever host generated it.
+@OpenAPIDefinition(
+    info =
+        @Info(
+            title = "SeatRush gateway",
+            version = "0.1.0",
+            description =
+                "The single entry point: every client request arrives here, and what is"
+                    + " forwarded is a request whose caller is already known (README"
+                    + " section 6.1). The routes it proxies are described by the services"
+                    + " behind it; the one endpoint it answers itself is the demo login."),
+    servers =
+        @Server(url = "/", description = "The gateway, which is the only address a client needs"))
 public class GatewayApplication {
 
   public static void main(String[] args) {

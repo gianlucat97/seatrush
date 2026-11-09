@@ -2,6 +2,7 @@ package com.seatrush.payment.adapters.in.web;
 
 import com.seatrush.payment.domain.ProviderSettings;
 import com.seatrush.payment.domain.SimulatorSettings;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
@@ -27,6 +28,11 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 @RequestMapping("/internal/config")
+@Tag(
+    name = "Internal",
+    description =
+        "Not exposed by the gateway, and called by another service or by an operator (README "
+            + "section 12.7)")
 public class InternalConfigController {
 
   private final ProviderSettings settings;

@@ -4,6 +4,10 @@ import com.seatrush.queue.application.QueueService;
 import com.seatrush.queue.application.SaleCalendar;
 import com.seatrush.queue.application.WaitingPlace;
 import com.seatrush.queue.domain.NotWaitingException;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import java.time.Instant;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -37,6 +41,11 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
  */
 @RestController
 @RequestMapping("/api/events/{eventId}/queue")
+@Tag(
+    name = "Waiting room",
+    description =
+        "Joining the queue for a sale, asking for a position, and the stream that pushes one "
+            + "(README section 12.3)")
 public class QueueController {
 
   private final QueueService queue;
@@ -88,6 +97,21 @@ public class QueueController {
    * and poll instead, and a client that does both is told the same thing twice rather than counted
    * twice: a listener is a socket this pod holds, not a seat in the queue.
    */
+  // Described as the text it is rather than as the shape of SseEmitter, which is a Spring class
+  // with a timeout field and nothing a client ever receives. The grammar of an event stream
+  // belongs to the SSE specification, so what is worth publishing here is the event names.
+  @ApiResponse(
+      responseCode = "200",
+      description =
+          "An open event stream, ending itself on ADMITTED and on SOLD_OUT. POSITION carries"
+              + " {eventId, position, estimatedWaitSeconds}, ADMITTED carries {eventId,"
+              + " admissionToken, admissionExpiresAt} and SOLD_OUT carries {eventId}. The field"
+              + " names are the ones queue/me answers with, so one parser serves both (README"
+              + " section 12.3)",
+      content =
+          @Content(
+              mediaType = MediaType.TEXT_EVENT_STREAM_VALUE,
+              schema = @Schema(type = "string")))
   @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
   public SseEmitter stream(@PathVariable UUID eventId, @RequestHeader("X-User-Id") UUID userId) {
     WaitingPlace waiting =

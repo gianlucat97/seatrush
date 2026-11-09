@@ -739,7 +739,7 @@ CREATE TABLE payment_operation (
 
 ## 12. Public API
 
-All endpoints are served through the gateway under `/api`. Errors follow **RFC 9457 (Problem Details)** with a stable `code` field. An OpenAPI 3 specification is generated per service and published under `docs/api/`. Timestamps are ISO-8601 UTC; money is `{ "amountCents": 4500, "currency": "EUR" }`.
+All endpoints are served through the gateway under `/api`. Errors follow **RFC 9457 (Problem Details)** with a stable `code` field. An **OpenAPI 3.1 document is generated per service and published under [`docs/api/`](docs/api/)**, derived from the running service and compared against it by the build ([§17.4](#174-the-api-specifications)). Timestamps are ISO-8601 UTC; money is `{ "amountCents": 4500, "currency": "EUR" }`.
 
 ### 12.1 Auth (demo)
 
@@ -964,9 +964,10 @@ There is no Alertmanager in the local stack. A firing rule is visible under **Al
 | Concurrency | JUnit + virtual threads + Testcontainers | e.g. 10,000 concurrent hold attempts on 100 seats → exactly 100 seats held, never more; one hold per user |
 | Integration | Testcontainers (Postgres, Redis, Kafka), Spring Boot tests | Both outbox relays, idempotent consumers, full SAGA happy path and every compensation, seat commit crash window |
 | Message contracts | JSON Schema validation ([§17.3](#173-the-message-schemas)) | Every message type of `libs/messaging`: the schema matches the record, a producer's bytes satisfy it, and a consumer reads them back |
-| API | REST Assured | Contracts, error codes, idempotency behaviour, ownership checks |
+| API contracts | OpenAPI 3.1 published per service ([§17.4](#174-the-api-specifications)) | The document each service serves, compared against the one committed under `docs/api/` |
+| API | MockMvc and WebTestClient, over a real context | Contracts, error codes, idempotency behaviour, ownership checks |
 | Architecture | ArchUnit | Layering rules (domain has no framework dependency), no cross-service module dependency |
-| End-to-end | Docker Compose + REST Assured | Lobby → queue → admission → hold → checkout → ticket; sold-out notice |
+| End-to-end | Docker Compose, driven by the load test and the checker | Lobby → queue → admission → hold → checkout → ticket; sold-out notice |
 | Load | Gatling (Java DSL), `make load-small` | The scenario of [§18.1](#181-scenario), followed by the checker below ([§18.1.1](#1811-how-it-is-run)) |
 | Chaos | `make chaos` ([§17.2](#172-the-chaos-experiments)), during a load run | Six of the [§16](#16-failure-modes) rows, each with the recovery that row promises |
 | Invariants | The checker of [§17.1](#171-the-invariant-checker), over the stores of a deployment | Every invariant of [§4](#4-core-invariants) that a finished run can still be asked about |
@@ -1045,6 +1046,32 @@ They are generated from the records and committed, which only stays true if some
 **Validation is the half that makes them a contract.** Every type has a sample, the catalog test already asserts that set is complete, and each sample is encoded by the codec that publishes to Kafka, validated against its schema, and decoded by the codec that consumes from it. That is the row of [§17](#17-testing-strategy) in both directions. The validator is told to assert `format`, which JSON Schema 2020-12 leaves off by default: these documents say `format: uuid` and mean it, and a consumer validating with them has the same switch to throw.
 
 **An unknown property is accepted, deliberately.** [ADR-0007](docs/adr/0007-json-messages-with-schema-version.md) is the compatibility policy: fields are added and consumers ignore what they do not know. A schema that refused one would describe a rule the services do not follow and would fail on the first additive change. There is a test for that too, so the permissiveness is a decision on the record rather than a gap.
+
+### 17.4 The API specifications
+
+[`docs/api/`](docs/api/) holds one OpenAPI 3.1 document per service, named after it, describing the endpoints of [§12](#12-public-api) as that service describes them. Six files, no index: a directory whose file names are the six services of [§6](#6-service-topology) needs no second list of itself, which is the opposite of the case the message schemas make for having one.
+
+**Each document is asked of its own service while that service is running**, by an `OpenApiIT` with the stores that service holds behind it. That is the whole design, and it is the same argument the message schemas make in reverse. The document is built from the handler mappings, the argument resolvers, the validation annotations and the Jackson configuration that are actually in effect, so a slice test with its own mapper and a subset of the beans could publish a contract no deployed pod serves. The cost is that regenerating needs Docker, which is why `make api-docs` is a `verify` and not a `test`.
+
+Write or compare, as in [§17.3](#173-the-message-schemas): without a flag each test asks its service for the document and compares it to the committed file, so an endpoint added, renamed or retyped without regenerating fails the build and says `make api-docs`; with `-Dseatrush.api.write=true`, which is what that target passes, it writes instead. The shared half of those six tests is one class in `libs/test-support`, so the write flag, the line endings and the version check cannot disagree between services.
+
+**The version is checked rather than trusted.** Each service declares its own `info.version` in the `@OpenAPIDefinition` of its application class, and the test compares it against the version Maven is building, which Failsafe passes in. Six hand-written version strings would otherwise go stale one release at a time, each of them inside a published contract.
+
+**The sections of the documents are the subsections of [§12](#12-public-api)**: `Events and seat map`, `Waiting room`, `Holds`, `Orders`, `Auth`, `Internal`. Left alone, springdoc tags each operation with the class name of its controller, which groups the API by the way it happens to be split into files. The same endpoints are described twice, in prose there and as a schema here, and they are at least filed under the same headings.
+
+**The server is `/` and that is deliberate.** Unset, springdoc fills the server in from the request that asked for the document, which is a different address in Compose, in the cluster and in the test that publishes the file. A published contract should not name whichever host generated it.
+
+**Three things these documents say less about than the rest, each for a reason:**
+
+**The gateway's is the shortest, and it is not a gap.** What it proxies are Spring Cloud Gateway routes, which are predicates and filters rather than handler methods, so nothing in the process can be asked what they look like. Each of those paths is described by the service that answers it, which is what the other five documents are. The gateway's own document is the one endpoint it answers itself, the demo login.
+
+**The two SSE endpoints are described as the text they carry.** Left alone, springdoc publishes the shape of `SseEmitter`, a Spring class with a timeout field and nothing a client ever receives, which is worse than saying little: it is a schema a client could parse against and be wrong. The response is declared as `text/event-stream` carrying a string, with the event names and their payloads in the description, because the grammar of an event stream belongs to the SSE specification rather than to JSON Schema.
+
+**The error responses are not in the documents.** Every service answers failures with the Problem Details of [§12.6](#126-error-codes), and what is published here is the success side of each operation only. The reason is the one this whole directory exists for: the error body is Spring's `ProblemDetail` plus the extra members each failure carries, built in an `ApiExceptionHandler` rather than returned as a record, so there is no type to derive a schema from. Writing one by hand would be exactly the hand-maintained description that drifts, and it would drift inside the document whose purpose is not to. [§12.6](#126-error-codes) is the contract for the error shape and the stable `code` vocabulary, and it is tested where the errors are produced.
+
+`springdoc.writer-with-order-by-keys` and `springdoc.writer-with-default-pretty-printer` are set in all six services. Both are about the bytes rather than the content: these files are compared byte for byte, so the writer has to produce the same document twice. One consequence worth having is that the live `/v3/api-docs` of a pod is the committed file, character for character.
+
+**Where the endpoint is reachable is the same answer as [§12.7](#127-internal-endpoints-not-exposed-by-the-gateway).** The gateway routes `/api`, so `/v3/api-docs` of the five services behind it is reachable inside the cluster and from nowhere else. The gateway's own is behind the same bearer token every other path of it needs, which is why its test sends one: widening what the single internet-facing process serves without a token is not a change a documentation feature gets to make.
 
 ## 18. Benchmark
 
@@ -1169,7 +1196,8 @@ seatrush/
 │   └── prometheus/                 # scrape config of the local stack, and the alert rules
 ├── docs/
 │   ├── adr/                        # one file per row of section 25, validated in CI
-│   ├── api/                        # generated OpenAPI specs
+│   ├── api/                        # one OpenAPI 3.1 document per service, generated from
+│   │                               # the running service and compared against it by the build
 │   ├── messages/                   # JSON Schemas of the Kafka messages, generated and
 │   │                               # compared against the records by the build
 │   ├── benchmarks/
@@ -1246,7 +1274,7 @@ Conventions every module follows, so the code base stays consistent.
 
 1. Code and tests (unit + integration) pass in CI.
 2. Metrics and log fields added where the feature changes state.
-3. OpenAPI / message schemas regenerated if contracts changed.
+3. `make api-docs` and `make message-docs` run if contracts changed, which the build will otherwise ask for.
 4. Invariant checker updated if a new invariant is introduced.
 
 ## 22. Configuration

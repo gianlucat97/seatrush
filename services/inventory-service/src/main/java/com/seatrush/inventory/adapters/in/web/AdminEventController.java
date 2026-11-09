@@ -2,6 +2,7 @@ package com.seatrush.inventory.adapters.in.web;
 
 import com.seatrush.inventory.application.EventCatalogService;
 import com.seatrush.inventory.domain.Event;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.net.URI;
 import java.util.UUID;
@@ -22,6 +23,9 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 @RequestMapping("/api/admin/events")
+@Tag(
+    name = "Events and seat map",
+    description = "Reading the catalog, an event and the seat map of a sale (README section 12.2)")
 public class AdminEventController {
 
   private final EventCatalogService catalog;

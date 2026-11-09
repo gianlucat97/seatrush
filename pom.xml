@@ -61,6 +61,11 @@
          an accident, since a schema checked by the serializer that produced the bytes would agree
          with itself. -->
     <json-schema-validator.version>1.5.9</json-schema-validator.version>
+    <!-- springdoc, which serves the OpenAPI document of every service (README section 12). The
+         3.0.x line is the Spring Boot 4.0 one: 2.x is built against Boot 3 and 3.1.x and later
+         against Boot 4.1, and this is the only version range whose parent is the Boot minor
+         these services run on. Not managed by the Boot BOM, so the version lives here. -->
+    <springdoc.version>3.0.3</springdoc.version>
 
     <!-- Build plugins -->
     <maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
@@ -127,6 +132,21 @@
         <version>${json-schema-validator.version}</version>
         <scope>test</scope>
       </dependency>
+      <!-- The two springdoc starters, one per web stack: five services are Spring MVC and the
+           gateway is WebFlux. Both are the -api artifact rather than the -ui one, so what each
+           service gains is the document at /v3/api-docs and not a bundled Swagger UI. The UI is a
+           console, this system already has one way in (README section 6.7), and shipping twelve
+           megabytes of static assets inside six images to get it is not a trade worth making. -->
+      <dependency>
+        <groupId>org.springdoc</groupId>
+        <artifactId>springdoc-openapi-starter-webmvc-api</artifactId>
+        <version>${springdoc.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.springdoc</groupId>
+        <artifactId>springdoc-openapi-starter-webflux-api</artifactId>
+        <version>${springdoc.version}</version>
+      </dependency>
       <dependency>
         <groupId>com.tngtech.archunit</groupId>
         <artifactId>archunit-junit5</artifactId>
@@ -172,6 +192,13 @@
             <includes>
               <include>**/*IT.java</include>
             </includes>
+            <systemPropertyVariables>
+              <!-- What the build calls itself, which the integration tests that publish the
+                   OpenAPI documents of README section 12 compare against the version each
+                   service declares. Six hand-written version strings would otherwise go stale
+                   one release at a time, each of them in a published contract. -->
+              <seatrush.project.version>${project.version}</seatrush.project.version>
+            </systemPropertyVariables>
           </configuration>
           <executions>
             <execution>

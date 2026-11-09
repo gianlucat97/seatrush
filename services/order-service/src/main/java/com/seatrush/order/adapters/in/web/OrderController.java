@@ -4,6 +4,7 @@ import com.seatrush.order.application.CheckoutService;
 import com.seatrush.order.application.OrderQueryService;
 import com.seatrush.order.application.StartCheckoutCommand;
 import com.seatrush.order.domain.Order;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
@@ -34,6 +35,9 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 @RequestMapping("/api/orders")
+@Tag(
+    name = "Orders",
+    description = "Starting a checkout and following the order it produces (README section 12.5)")
 public class OrderController {
 
   private final CheckoutService checkouts;

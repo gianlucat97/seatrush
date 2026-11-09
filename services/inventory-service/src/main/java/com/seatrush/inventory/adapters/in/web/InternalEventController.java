@@ -1,6 +1,7 @@
 package com.seatrush.inventory.adapters.in.web;
 
 import com.seatrush.inventory.application.SeatMapService;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import java.util.UUID;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -31,6 +32,11 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 @RequestMapping("/internal")
+@Tag(
+    name = "Internal",
+    description =
+        "Not exposed by the gateway, and called by another service or by an operator (README "
+            + "section 12.7)")
 public class InternalEventController {
 
   private final SeatMapService seatMaps;

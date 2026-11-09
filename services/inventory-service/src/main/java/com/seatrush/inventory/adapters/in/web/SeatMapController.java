@@ -2,6 +2,7 @@ package com.seatrush.inventory.adapters.in.web;
 
 import com.seatrush.inventory.application.SeatMapService;
 import com.seatrush.inventory.application.SeatMapSnapshot;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -18,6 +19,9 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 @RequestMapping("/api/events/{eventId}/seatmap")
+@Tag(
+    name = "Events and seat map",
+    description = "Reading the catalog, an event and the seat map of a sale (README section 12.2)")
 public class SeatMapController {
 
   private final SeatMapService seatMap;
