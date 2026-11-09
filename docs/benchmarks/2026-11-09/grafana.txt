@@ -1,0 +1,17 @@
+the three dashboards of README section 14.4, at the window of this run
+
+  http://localhost:3000/d/seatrush-on-sale?from=1794252018000&to=1794252184000
+  http://localhost:3000/d/seatrush-checkout?from=1794252018000&to=1794252184000
+  http://localhost:3000/d/seatrush-platform?from=1794252018000&to=1794252184000
+
+Saved next to this file as grafana/<page>.png. A screenshot is the only artifact here that
+nothing in the repository can regenerate, because the retention of the local Prometheus is
+seven days and the one in a cluster goes with the cluster.
+
+Taken with a headless browser rather than by hand, so the three are framed alike and the
+time range is the one above rather than whenever somebody opened the page. kiosk drops the
+Grafana chrome, the window is as tall as the page so nothing is left unrendered below the
+fold, and the virtual time budget is what gives the panels time to answer:
+
+  chrome --headless=new --hide-scrollbars --window-size=1600,<page height>
+    --virtual-time-budget=40000 --screenshot=<file> '<url above>&kiosk'

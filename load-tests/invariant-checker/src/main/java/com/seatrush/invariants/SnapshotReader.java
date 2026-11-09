@@ -29,17 +29,29 @@ import java.util.UUID;
  * reader never asks a service anything. A checker that called an API would be checking what the
  * service says about itself, and the question is what is actually in the stores.
  *
- * <p>The order of the reads is part of the correctness of the checks that follow, and there are two
- * decisions in it. Postgres is read before Redis, because step 4 of the commit procedure (README
- * section 9.6) writes the sale and then the seat map, so reading in the same direction means a sale
- * that landed between the two reads shows up as a sold seat whose map entry is about to change
- * rather than as a seat map entry with no sale. And within Redis the hold hashes are read before
- * the two sorted sets, because a hold that is expired between the two reads then shows as a
+ * <p>The order of the reads is part of the correctness of the checks that follow, and there are
+ * three decisions in it. Postgres is read before Redis, because step 4 of the commit procedure
+ * (README section 9.6) writes the sale and then the seat map, so reading in the same direction
+ * means a sale that landed between the two reads shows up as a sold seat whose map entry is about
+ * to change rather than as a seat map entry with no sale. Within Redis the hold hashes are read
+ * before the two sorted sets, because a hold that is expired between the two reads then shows as a
  * finished hold that has already left its set, instead of a set entry with no hold behind it.
  *
- * <p>Neither of those orderings makes a reading of a working system trustworthy, and they are not
- * meant to. They make the window small; the settle wait of {@link #settle(PrintStream)} is what
- * closes it, and the two checks that depend on it are skipped when it does not.
+ * <p>And the hold hashes are read before the seat map, which is the one of the three that was
+ * learned rather than reasoned out. The sweeper of README section 9.3 is the one writer the settle
+ * wait below does not stop: it runs every second, and {@code expire.lua} frees the seats and marks
+ * the hold {@code EXPIRED} in a single script, so no reading of Redis at one instant can show both
+ * halves disagreeing. Two reads at two instants can. With the map read first, a hold swept in
+ * between is a seat still reading {@code H:<holdId>} against a hold that is already {@code
+ * EXPIRED}, which is exactly the shape of a real bug and is what the seat map check reported on the
+ * first run this repository ever tried to publish. Read the other way round it is a hold that is
+ * still {@code ACTIVE} a moment past its expiry, which is what {@code --grace} exists to tolerate,
+ * against seats that are already free, which no check asks about.
+ *
+ * <p>None of those orderings makes a reading of a working system trustworthy, and they are not
+ * meant to. They make the window one round trip wide and put the benign state inside it; the settle
+ * wait of {@link #settle(PrintStream)} is what closes it for the checkout path, and the two checks
+ * that depend on it are skipped when it does not.
  */
 final class SnapshotReader implements AutoCloseable {
 
@@ -376,15 +388,11 @@ final class SnapshotReader implements AutoCloseable {
   /**
    * The Redis state of one event (README section 9.2).
    *
-   * <p>The hashes are read before the sorted sets, and the whole point of that order is explained
-   * at the top of this class.
+   * <p>The holds are read before the seat map and the seat map before the sorted sets, and the
+   * whole point of that order is explained at the top of this class.
    */
   private Snapshot.SeatState readSeatState(UUID eventId) {
     RedisCommands<String, String> redis = connection.sync();
-    Map<String, String> seats = redis.hgetall(SeatKeys.seats(eventId));
-    Long available = numberOf(redis.get(SeatKeys.available(eventId)));
-    Long version = numberOf(redis.get(SeatKeys.version(eventId)));
-
     List<Snapshot.Hold> holds = new ArrayList<>();
     for (String key : scan(redis, SeatKeys.holdPattern(eventId))) {
       Map<String, String> hash = redis.hgetall(key);
@@ -404,6 +412,10 @@ final class SnapshotReader implements AutoCloseable {
         userHolds.put(SeatKeys.userIdOf(key), UUID.fromString(holdId));
       }
     }
+
+    Map<String, String> seats = redis.hgetall(SeatKeys.seats(eventId));
+    Long available = numberOf(redis.get(SeatKeys.available(eventId)));
+    Long version = numberOf(redis.get(SeatKeys.version(eventId)));
 
     return new Snapshot.SeatState(
         seats,

@@ -1,0 +1,35 @@
+SeatRush invariant checker (README section 17)
+
+  read at   2026-11-09T19:23:10.231748200Z
+  postgres  localhost:5432 (seatrush_inventory, seatrush_order, seatrush_payment)
+  redis     localhost:6379
+  state     settled: every checkout has reached a terminal state
+  event     01a1c1c1-6ea6-7f77-a4ce-2611eee30682
+
+  I1      HELD      A seat is sold at most once per event
+                    123 sales over 123 distinct seats, 123 tickets
+  I3      HELD      A confirmed order has its seats sold, a ticket each and its payment captured
+                    65 confirmed orders
+  I4      HELD      A failed order leaves no seat sold, held or paid for
+                    3 failed orders {PAYMENT_DECLINED=3}
+  seats   HELD      The seat map and the sold seats say the same thing
+                    1 seat maps compared
+  I7      HELD      No hold outlives its TTL and no checkout outlives its deadline
+                    9 live holds
+  I8      HELD      A user holds at most one hold per event
+                    9 buyers hold something
+  totals  HELD      Tickets match the seats sold, and the money matches the orders
+                    123 tickets against 123 seats sold on confirmed orders
+
+  Totals
+    events           1
+    seats            160
+    seats sold       123
+    tickets issued   123
+    orders           68 {CONFIRMED=65, FAILED=3}
+    payments         133 {AUTHORIZE DECLINED=3, AUTHORIZE SUCCEEDED=65, CAPTURE SUCCEEDED=65}
+    captured         9350.00 EUR
+    live holds       9
+    events sold out  0
+
+OK: all 7 checks held

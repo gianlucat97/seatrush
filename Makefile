@@ -13,7 +13,7 @@ COMPOSE ?= docker compose --file $(COMPOSE_FILE) --env-file .env
 .DEFAULT_GOAL := help
 .PHONY: help format build test-it clean up down images seed ui ui-build
 .PHONY: k8s-up k8s-down k8s-seed k8s-status k8s-template load-small load-full
-.PHONY: chaos check message-docs api-docs
+.PHONY: chaos check message-docs api-docs publish-run
 .PHONY: k8s-observability k8s-hpa k8s-grafana
 
 # The frontend is a Node project rather than a Maven module, so it has its own
@@ -137,6 +137,13 @@ load-small: ## 5,000-user load test followed by the invariant checker
 
 load-full: ## The benchmark of README section 18.1: 200,000 buyers, needs a cluster and an injector
 	@./scripts/load.sh full $(LOAD_FLAGS)
+
+# Which profile the published run is of, since the environment decides that and not this file:
+#   make publish-run RUN_PROFILE=full
+RUN_PROFILE ?= small
+
+publish-run: ## A run of the benchmark published into docs/benchmarks/ (README section 18.2)
+	@./scripts/publish-run.sh $(RUN_PROFILE) $(LOAD_FLAGS)
 
 # One experiment instead of all of them:
 #   make chaos EXPERIMENTS="kill-order stop-kafka"

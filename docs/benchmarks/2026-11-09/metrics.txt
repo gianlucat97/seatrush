@@ -1,0 +1,57 @@
+the readings of README section 18.3, from Prometheus
+  event                             01a1c1c1-6ea6-7f77-a4ce-2611eee30682
+  window                            2026-11-09T19:20:18+00:00 to 2026-11-09T19:23:04+00:00  (166s)
+  prometheus                        http://localhost:9090
+  counters                          the value now minus the value when the run began
+
+the venue
+  capacity                          160
+  seats left at the end             26   (sampled, +/-10s)
+  seats sold                        123
+  oversell prevented by the guard   0   (must be 0)
+
+when it sold out
+  first reading below capacity      2026-11-09T19:21:18+00:00
+  first reading at zero             never
+  time to sell out                  the sale did not sell out inside the window
+
+the latencies of README section 15
+  queue join p50                    16 ms   (the request, on queue-service, between bucket edges)
+  queue join p99                    1049 ms   (the request, on queue-service, between bucket edges)
+  hold p50                          201 ms   (the operation, on inventory-service, between bucket edges)
+  hold p99                          972 ms   (the operation, on inventory-service, between bucket edges)
+  checkout p50                      39705 ms   (order created to order confirmed, between bucket edges)
+  checkout p99                      56617 ms   (order created to order confirmed, between bucket edges)
+  propagation p50                   251 ms   (seat moved to delta sent, between bucket edges)
+  propagation p99                   8275 ms   (seat moved to delta sent, between bucket edges)
+
+the holds
+  holds conflict                    1398
+  holds ok                          77
+  holds frozen at checkout          86
+  holds released by the sweeper     no series
+  holds released on purpose         3
+  admissions                        400
+  slots freed expired               0
+  slots freed released              68
+
+the checkouts
+  started adopted                   9
+  started created                   68
+  compensated PAYMENT_DECLINED      3
+  late replies PaymentCaptured      247
+  payment replays CAPTURE           247
+  stuck checkouts at the end        0
+
+the load it was under
+  peak queued                       0
+  peak in the purchase area         394
+  peak seat map streams             32
+  peak waiting room streams         24
+
+what nothing is allowed to have
+  5xx answers gateway               9
+  5xx answers order-service         9
+  duplicate messages skipped        no series
+  seats fixed by the reconciler     0
+  outbox lag at the end             0
