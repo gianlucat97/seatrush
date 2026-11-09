@@ -95,6 +95,15 @@ jobs:
       - name: Validate the ADRs
         run: python scripts/check-adrs.py
 
+      # The README against the repository it describes. It is the specification of this system and
+      # it is two thousand lines of cross references, which is the condition under which a document
+      # stops being checked by anyone reading it: a link to a renamed heading still renders as a
+      # link, a path that moved still reads like a path, and a section that was renumbered leaves
+      # every link to it pointing somewhere real and wrong. None of that breaks a build, which is
+      # exactly why it is worth a job.
+      - name: Validate the README
+        run: python scripts/check-readme.py
+
       # The Helm chart of README section 24, which fails in three quiet ways. A manifest
       # Kubernetes would reject is a release that half-applies, and the first half is
       # whichever objects sorted earlier; a chart that has drifted from the Compose stack

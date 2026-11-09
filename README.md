@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/gianlucat97/seatrush/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/gianlucat97/seatrush/actions/workflows/ci.yml)
 
-> Status: 🚧 under active development. This document is the technical specification of the system; values marked *Target* are goals that will be validated by the benchmark suite.
+> Status: 🚧 under active development. This document is the technical specification of the system; values marked *Target* are goals, and [§18.3](#183-results) is the run that reports against them.
 
 ---
 
@@ -1039,7 +1039,7 @@ One difference between the two is worth stating rather than hiding. In the clust
 
 ### 17.3 The message schemas
 
-`docs/messages/` holds one JSON Schema per message type of [§10.3](#103-message-types), describing the whole envelope as it appears on a topic rather than the payload alone: what a consumer reads off `inventory.replies` is an envelope, and a schema of the payload would describe a document nobody receives. `docs/messages/index.md` lists them by topic and is generated with them.
+`docs/messages/` holds one JSON Schema per message type of [§10.3](#103-message-payloads), describing the whole envelope as it appears on a topic rather than the payload alone: what a consumer reads off `inventory.replies` is an envelope, and a schema of the payload would describe a document nobody receives. `docs/messages/index.md` lists them by topic and is generated with them.
 
 They are generated from the records and committed, which only stays true if something checks it. `MessageSchemaTest` is the generator and the check in one class: without a flag it regenerates every schema and compares, so a file that has drifted fails the build and says `make message-docs`; with `-Dseatrush.messages.write=true`, which is what that target passes, it writes them instead.
 
@@ -1051,7 +1051,7 @@ They are generated from the records and committed, which only stays true if some
 
 ### 17.4 The API specifications
 
-[`docs/api/`](docs/api/) holds one OpenAPI 3.1 document per service, named after it, describing the endpoints of [§12](#12-public-api) as that service describes them. Six files, no index: a directory whose file names are the six services of [§6](#6-service-topology) needs no second list of itself, which is the opposite of the case the message schemas make for having one.
+[`docs/api/`](docs/api/) holds one OpenAPI 3.1 document per service, named after it, describing the endpoints of [§12](#12-public-api) as that service describes them. Six files, no index: a directory whose file names are the six services of [§6](#6-services) needs no second list of itself, which is the opposite of the case the message schemas make for having one.
 
 **Each document is asked of its own service while that service is running**, by an `OpenApiIT` with the stores that service holds behind it. That is the whole design, and it is the same argument the message schemas make in reverse. The document is built from the handler mappings, the argument resolvers, the validation annotations and the Jackson configuration that are actually in effect, so a slice test with its own mapper and a subset of the beans could publish a contract no deployed pod serves. The cost is that regenerating needs Docker, which is why `make api-docs` is a `verify` and not a `test`.
 
@@ -1175,10 +1175,10 @@ Each published run is one directory under `docs/benchmarks/<date>/`, holding the
 | Database | PostgreSQL 17+, Flyway |
 | Real-time | Server-Sent Events |
 | Observability | Micrometer, Prometheus, Grafana, OpenTelemetry, Tempo |
-| Testing | JUnit Jupiter, AssertJ, Mockito, Testcontainers, REST Assured, ArchUnit, Gatling; Vitest and Testing Library for the frontend |
-| Code quality | Spotless (google-java-format), Error Prone, JaCoCo; Prettier and the TypeScript compiler for the frontend |
+| Testing | JUnit Jupiter, AssertJ, Mockito, Testcontainers, MockMvc and WebTestClient, ArchUnit, Gatling; Vitest and Testing Library for the frontend |
+| Code quality | Spotless (google-java-format), `-Xlint:all` on every module, JaCoCo; Prettier and the TypeScript compiler for the frontend |
 | Frontend | TypeScript, React, Vite, SVG seat map |
-| Containers | Docker, Jib for image builds |
+| Containers | Docker, one image per service from the layered jar Spring Boot already builds |
 | Orchestration | Kubernetes, Helm (umbrella chart, library subchart), kind for the local cluster, HPA, KEDA (scaling on Kafka lag) |
 | CI | GitHub Actions |
 
@@ -1228,15 +1228,15 @@ seatrush/
 │   │                               # the running service and compared against it by the build
 │   ├── messages/                   # JSON Schemas of the Kafka messages, generated and
 │   │                               # compared against the records by the build
-│   ├── benchmarks/                 # one directory per published run of section 18.3,
-│   │                               # collected by scripts/publish-run.sh
-│   └── diagrams/
+│   └── benchmarks/                 # one directory per published run of section 18.3,
+│                                   # collected by scripts/publish-run.sh
 ├── scripts/                        # seed.sh, check.sh, load.sh, chaos.sh, publish-run.sh
 │                                   # and the readings it takes, the two k8s scripts,
-│                                   # the three CI validators
+│                                   # the four CI validators
 ├── .github/workflows/
-│   ├── ci.yml                      # format check, build, unit + integration tests, ArchUnit
-│   └── images.yml                  # build and push container images on tag
+│   ├── ci.yml                      # format check, the validators, build, unit + integration
+│   │                               # tests, ArchUnit, the client, and the images
+│   └── delete-merged-branch.yml    # drops a merged feature branch from origin (section 21)
 ├── .env.example
 ├── Makefile
 ├── LICENSE
@@ -1299,6 +1299,13 @@ Conventions every module follows, so the code base stays consistent.
   three short-lived prefixes. Local branches are never touched, and `master` and `develop` are
   protected from deletion by the same ruleset that keeps them from being force pushed.
 - Every architectural decision that changes this specification gets an ADR and an update to this README.
+- This document is checked against the repository in CI by `scripts/check-readme.py`: every anchor
+  reaches a heading and reaches the section number the link says it does, every relative link and
+  every repository path in a code span exists, every `make` target named here is a target of the
+  Makefile, the table of contents and the sections are the same list, and every path drawn in the
+  tree of [§20](#20-repository-structure) is in the repository. All five fail silently otherwise,
+  which is how this file came to link to four headings that had been renamed out from under it and
+  to draw a directory that had never held a file.
 
 **Definition of done for a feature**
 
@@ -1411,7 +1418,7 @@ The first `make up` builds seven images and takes a few minutes, most of it the 
 
 Then `make seed` creates an event through the public API and prints the two links to open it with. The sale opens two minutes later, which is time enough to open a second window and watch the venue fill from it.
 
-`make load-small` is the load test of [§18.1](#1811-how-it-is-run) against this stack, followed by the invariant checker on the sale it just made. It creates its own venue, opens the sale, and runs 5,000 buyers at 2,000 seats, which is a real flash on-sale: most buyers lose, and the question is whether losing is as fast and as correct as winning. On a machine that is also running the stack it is measuring, that size saturates the whole thing: 5,000 buyers against this Compose stack on one laptop produced 630 requests a second, a p99 of 17 seconds and 1% failures, almost all of them sockets the injector could not open and `503`s from a stack with nothing left to give. It is also not a figure to count on. The same command on the same machine, run again for [§18.2](#182-environment), went over the edge instead of up to it: 81% of the requests failed, nearly all of them connections closed under the injector or refused before they opened, and ten minutes of it sold no seats at all. `LOAD_FLAGS` is how a run is scaled to the machine at hand, and a tenth of `small` fits comfortably:
+`make load-small` is the load test of [§18.1.1](#1811-how-it-is-run) against this stack, followed by the invariant checker on the sale it just made. It creates its own venue, opens the sale, and runs 5,000 buyers at 2,000 seats, which is a real flash on-sale: most buyers lose, and the question is whether losing is as fast and as correct as winning. On a machine that is also running the stack it is measuring, that size saturates the whole thing: 5,000 buyers against this Compose stack on one laptop produced 630 requests a second, a p99 of 17 seconds and 1% failures, almost all of them sockets the injector could not open and `503`s from a stack with nothing left to give. It is also not a figure to count on. The same command on the same machine, run again for [§18.2](#182-environment), went over the edge instead of up to it: 81% of the requests failed, nearly all of them connections closed under the injector or refused before they opened, and ten minutes of it sold no seats at all. `LOAD_FLAGS` is how a run is scaled to the machine at hand, and a tenth of `small` fits comfortably:
 
 ```bash
 make load-small LOAD_FLAGS="-Dseatrush.load.lobbyUsers=150 -Dseatrush.load.arrivingUsers=350   -Dseatrush.load.spectators=20 -Dseatrush.load.watchers=20   -Dseatrush.load.rows=5 -Dseatrush.load.seatsPerRow=10"
@@ -1553,7 +1560,7 @@ TCP connect rather than a query, from one small image, for all three stores.
 everything else to the client. Nothing else is exposed, which is the arrangement
 [§13](#13-security) depends on, a service trusting the `X-User-Id` it is handed because nothing
 outside can reach it to set one. The two streams of this system are silent for minutes at a
-time by design ([§12.2](#122-seat-map), [§12.3](#123-waiting-room)), so the rule carries the
+time by design ([§12.2](#122-events-and-seat-map), [§12.3](#123-waiting-room)), so the rule carries the
 same three decisions `deploy/docker-compose/nginx.conf` makes: no response buffering, and read
 and send timeouts of an hour. Without the first, a seat map update sits in a proxy buffer until
 the next one arrives; without the other two, a waiting client is disconnected every minute.
@@ -1564,7 +1571,7 @@ the next one arrives; without the other two, a waiting client is disconnected ev
 none of the workload, and two workers. Three and not one, because two of the things the chart
 will say about a pod are only true with somewhere else to put it, since a PodDisruptionBudget
 and a topology spread constraint over a single node are statements nothing can satisfy or
-violate ([§24.5](#245-what-the-chart-does-not-do-yet)). It is also what gives the autoscaling
+violate ([§24.5](#245-disruption-and-placement)). It is also what gives the autoscaling
 of [§24.3](#243-autoscaling) somewhere to put the pods it adds.
 
 The ingress controller is pinned to the one worker that has a port mapped from the host,
@@ -2010,6 +2017,7 @@ The table is the index and nothing keeps an index honest by itself, so `scripts/
 | **M7 - Benchmark and chaos** | Gatling scenarios, invariant checker, chaos scripts, published results | Results table filled, invariant checker green, chaos run documented |
 | | *Arrived in parts. The invariant checker of [§17.1](#171-the-invariant-checker) came first, because it is what every other part of this milestone is judged by: a load test with nothing to check it against produces a throughput figure and no verdict. Then the Gatling simulation of [§18.1.1](#1811-how-it-is-run), which is `make load-small` and `make load-full`. Then the chaos experiments of [§17.2](#172-the-chaos-experiments), which is `make chaos`. Then `make publish-run` and the run of [§18.2](#182-environment) and [§18.3](#183-results), which is a laptop-sized one: the scenario at the size [§18.1](#181-scenario) states needs a cluster and an injector of its own, and that run is the one thing in this table still owed.* | |
 | **M8 - Polish** | ADRs complete, OpenAPI and message docs, demo GIF, final README review | - |
+| | *Arriving in parts. The ADRs of [§25](#25-architecture-decision-records), the message schemas of [§17.3](#173-the-message-schemas) and the API documents of [§17.4](#174-the-api-specifications) came first. Then the review of this document, which is `scripts/check-readme.py` and the drift it found: five cross references that went somewhere other than where they said, a tree drawing two files that are not in the repository, and three tools listed in [§19](#19-tech-stack) that this project has never used. The demo GIF is what is left.* | |
 
 **Future work**: Avro + Schema Registry, multi-region active-passive, waitlist for sold-out events, bot-detection signals, CDC-based outbox relay (Debezium) as an alternative implementation, per-section Redis sharding.
 
