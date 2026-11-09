@@ -209,6 +209,14 @@ $PYTHON scripts/benchmark-metrics.py \
   echo "Saved next to this file as grafana/<page>.png. A screenshot is the only artifact here that"
   echo "nothing in the repository can regenerate, because the retention of the local Prometheus is"
   echo "seven days and the one in a cluster goes with the cluster."
+  echo
+  echo "Taken with a headless browser rather than by hand, so the three are framed alike and the"
+  echo "time range is the one above rather than whenever somebody opened the page. kiosk drops the"
+  echo "Grafana chrome, the window is as tall as the page so nothing is left unrendered below the"
+  echo "fold, and the virtual time budget is what gives the panels time to answer:"
+  echo
+  echo "  chrome --headless=new --hide-scrollbars --window-size=1600,<page height>"
+  echo "    --virtual-time-budget=40000 --screenshot=<file> '<url above>&kiosk'"
 } > "$STAGE/grafana.txt"
 
 # ---------------------------------------------------------------------------------------

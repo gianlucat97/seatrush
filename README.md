@@ -992,6 +992,8 @@ Time-dependent logic (TTLs, deadlines, sweepers) uses an injected `java.time.Clo
 
 **Two of the checks need a system in which nothing is in flight**, and they are the two that compare the halves of a checkout against each other. Step 4 of the commit procedure ([§9.6](#96-seat-commit-procedure)) updates the seat map after the transaction that made the sale, and the tickets are written one step later again, so a checkout caught in between is a sale whose seat still says held, or a sale with no ticket yet. Both are the correct state to be in, and both are indistinguishable from the bug being looked for. So the checker waits: `--settle-timeout` is how long it gives every order to reach a terminal state, polling and saying what it is waiting for. A run that never settles is a finding of its own, and the usual reason is the one the counts name, a checkout whose capture has used up its retries and stays `SEATS_COMMITTED` by design ([§9.7](#97-saga-persistence)).
 
+**The hold sweeper is the one writer that wait does not stop**, and it is why the order of the reads is part of the checker rather than an implementation detail. `expire.lua` frees the seats and marks the hold `EXPIRED` in a single script ([§9.3](#93-hold-expiry)), so no reading of Redis at one instant can show a seat held by a hold that has expired; two reads at two instants can, and the first run this repository ever tried to publish reported exactly that. The seat map is therefore read *after* the hold hashes: straddling a sweep in that direction leaves a hold still `ACTIVE` a moment past its expiry, which is what `--grace` exists to tolerate, against seats that are already free, which no check asks about. A gate that cries wolf is worse than no gate, and a benchmark is published on this one.
+
 **The exit code is the contract**, because what reads it is a shell. `0` when every check ran and held, `1` when an invariant is broken, and `2` when the check could not be made at all: a store it could not reach, a flag that does not parse, or a system that never stopped working. An answer nobody has is not a guarantee, and a checker that exited `0` on one would turn a gate into decoration. `--settle-timeout 0` is the other mode, a deliberate look at a sale that is still running, where those two checks are skipped and the skip is expected rather than a failure.
 
 **It never writes, and it calls no service.** Read-only connections, no API client and no state of its own: a run can be checked twice, a failed run can be picked over by hand afterwards, and what the report describes is what is in the stores rather than what a service says about it. It also has no idea which load test produced the state it is reading, so the same command checks a benchmark, a demo, and a cluster somebody has been clicking around in.
@@ -1110,7 +1112,7 @@ make load-small LOAD_FLAGS="-Dseatrush.load.lobbyUsers=150 -Dseatrush.load.arriv
 
 **Most requests are supposed to be refused, so a refusal is not a failure.** A conflict on a hold is an answer, and in a sale with ten buyers per seat it is the common answer; the same goes for joining a sale that has already sold out. Each request therefore declares the statuses the scenario expects, and the one assertion that gates every run is that nothing outside them happened: no timeout, no 5xx, no status nobody designed for.
 
-**Two of the five targets of [§15](#15-non-functional-requirements) gate a run, and only on `full`.** Queue join and hold are one request each, with no poll and no pause inside them, so their p99 means what the table says. The checkout figure is a group around a command and however many polls followed, so it is quantised by the poll interval and is reported rather than gated. Seat-map propagation is not measured by this injector at all: it is the time between a seat moving and a watcher being told, which needs both ends of one change, and reading the pushed end is the thing that did not work. The targets are also switched off on `small`, because they are figures about the environment of [§18.2](#182-environment): a laptop injecting thousands of buyers at the stack it is itself running has no business being held to them, and a gate that fails for that reason is a gate people learn to ignore. `-Dseatrush.load.assertTargets=true` turns them on anywhere.
+**Two of the five targets of [§15](#15-non-functional-requirements) gate a run, and only on `full`.** Queue join and hold are one request each, with no poll and no pause inside them, so their p99 means what the table says. The checkout is the group around a command and however many polls followed, and that group is not the end-to-end figure however much it looks like one: Gatling reports a group as the cumulated response time of the requests inside it, so every one-second pause between polls is left out. On the run of [§18.3](#183-results) the group reads 7.0 s at p50 where the checkout actually took 39.7 s, and the giveaway is that its minimum is 450 ms for a journey that contains at least one full second of waiting. The end-to-end figure is therefore read off `seatrush_saga_duration_seconds`, which is the order being created and the order being confirmed as order-service timed it, and it is reported rather than gated. Seat-map propagation is not measured by this injector at all: it is the time between a seat moving and a watcher being told, which needs both ends of one change, and reading the pushed end is the thing that did not work. The targets are also switched off on `small`, because they are figures about the environment of [§18.2](#182-environment): a laptop injecting thousands of buyers at the stack it is itself running has no business being held to them, and a gate that fails for that reason is a gate people learn to ignore. `-Dseatrush.load.assertTargets=true` turns them on anywhere.
 
 **A `503` is retried with the same key.** [§12.6](#126-error-codes) defines `503 TEMPORARILY_UNAVAILABLE` as a dependency briefly away and says the request is safe to repeat with the same `Idempotency-Key`, and [§15](#15-non-functional-requirements) asks for no checkout to fail beyond client retries, so the simulation repeats it. The retries are a request of their own in the report, because how often a run had to retry is the saturation signal a benchmark is read for. This is also what found the one case where that promise was not kept, which [§9.4](#94-idempotency) now describes and the code now honours: the repeat used to be answered `409`.
 
@@ -1118,22 +1120,48 @@ make load-small LOAD_FLAGS="-Dseatrush.load.lobbyUsers=150 -Dseatrush.load.arriv
 
 ### 18.2 Environment
 
-Documented precisely for reproducibility: Kubernetes cluster type and node sizes, replicas per service, Redis/Kafka/Postgres sizing, Gatling injector hardware, exact commit hash.
+**Every published run records its own**, because a figure without one is a number somebody is asking to be believed. `scripts/publish-run.sh` writes `environment.txt` into the run's directory *before* the run rather than after it: the commit and whether the tree was clean, the host and its cores, the JVM the injector ran on, the container engine and what it was given, every `SEATRUSH_*` knob of [§22](#22-configuration) the stack was started with, and the image of every container with its id. The knobs are there because `.env` is git-ignored and it holds the door of the sale: a run made with a purchase area of 5,000 and one made with 40 are two different scenarios, and nothing else in the directory would say which one happened.
+
+The run published below was made on **one laptop running the Compose stack of [§23](#23-running-locally)**, not on the cluster [§18.1](#181-scenario) asks for. That is the first thing to know about every figure in [§18.3](#183-results):
+
+| What | The run of [§18.3](#183-results) |
+|------|----------------------------------|
+| Profile | `small` with six knobs moved: 400 buyers against 160 seats in the ten sections of §18.1 |
+| Stack | Docker Compose, one container per service of [§6](#6-services), one Postgres, one Redis, one broker |
+| Host | Intel i7-7700HQ, 4 cores and 8 threads, 16 GiB, Windows 11 |
+| Container engine | Docker 28.5.2, given 8 cores and 7.7 GiB |
+| Injector | the same machine, JDK 25, beside the fourteen containers it was measuring |
+| Configuration | the `.env.example` defaults, the purchase area of 5,000 included |
+| Commit | `59f34c8`, tree clean |
+
+**The scenario of [§18.1](#181-scenario) at the size that section states has no published run**, and that is a statement about this project rather than about the system. It needs a cluster of real nodes and an injector that is not sharing a CPU with them, and the figures it would produce are the ones [§15](#15-non-functional-requirements) sets targets for. The run below is a hundred times smaller than `small` is a hundred times smaller than that. What survives the shrinking is the shape, which is the property [§18.1.1](#1811-how-it-is-run) says both profiles are built around: demand outruns the venue by an order of magnitude, most buyers lose, and the question is whether losing is as fast and as correct as winning. What does not survive is every latency figure, and `assertTargets` is off at this size for exactly that reason.
+
+**`make load-small` at its own stated size does not fit on this hardware either**, which is worth recording because it is where the laptop's ceiling actually is. 5,000 buyers produced 295,347 requests of which 81 percent failed, 96 percent of those being connections closed under the injector or refused before they opened, and not one seat was sold in ten minutes. None of that is a measurement of the system: it is 5,000 concurrent sockets and a JVM holding them, on the same host as the stack they point at. [§23](#23-running-locally) gives the recipe for scaling a run down to the machine at hand, and the published run is that recipe applied.
 
 ### 18.3 Results
 
+The run of **9 November 2026**, in full in [`docs/benchmarks/2026-11-09/`](docs/benchmarks/2026-11-09/README.md). 400 buyers, 160 seats, 16 clients on the seat map stream and 24 on the waiting room stream, against the environment of [§18.2](#182-environment).
+
 | Metric | Result |
 |--------|--------|
-| Seats sold | TBD |
-| Oversold seats | TBD |
-| Time to sell out | TBD |
-| Hold p50 / p99 | TBD |
-| Checkout p50 / p99 | TBD |
-| Seat-map propagation p99 | TBD |
-| Compensations (declined / timeout / unavailable) | TBD |
-| Invariant checker | TBD |
+| Seats sold | 123 of 160 |
+| Oversold seats | **0** |
+| Time to sell out | the sale did not sell out |
+| Hold p50 / p99 | 201 ms / 972 ms on inventory-service, 685 ms / 2,322 ms as the client saw it |
+| Checkout p50 / p99 | 39.7 s / 56.6 s, order created to order confirmed |
+| Seat-map propagation p50 / p99 | 251 ms / 8.3 s |
+| Compensations (declined / timeout / unavailable) | 3 / 0 / 0 |
+| Invariant checker | all 7 checks held |
 
-Grafana screenshots, the Gatling report and the report of the invariant checker are stored for each published run in `docs/benchmarks/<date>/`.
+**The invariants are the result that transfers.** 1,475 hold attempts produced 77 holds and 1,398 conflicts, so 95 percent of the attempts lost their seats to somebody else, and the checker then found 123 sales over 123 distinct seats, a ticket for each, 9,350.00 EUR captured against 65 confirmed orders, and nothing sold twice. The Postgres guard rejected nothing, the reconciler repaired nothing and no message was delivered twice. That is [§4](#4-core-invariants) holding under a sale where most buyers lose, which is the thing the whole design is for and the one answer that does not depend on the hardware.
+
+**The latency figures are a measurement of the laptop.** All 400 buyers were admitted at once, because the purchase area is 5,000 wide and no run this machine can inject comes near filling it, so 68 checkouts ran concurrently across six JVMs on four cores that were also running the injector, the broker and two databases. The payment simulator is 300 ms at p50 by configuration, so a 39.7 s checkout is the queue in front of every step and not any step. The hold is the same story one order of magnitude down, and the seat map p50 of 251 ms is inside its target while its p99 is not.
+
+**Two rows of [§15](#15-non-functional-requirements) are met and the rest are not measured here.** Oversold seats is zero, and no checkout failed beyond a client retry: nine `POST /api/orders` were answered `503 TEMPORARILY_UNAVAILABLE`, the simulation repeated each with the same `Idempotency-Key` as [§12.6](#126-error-codes) says it may, and all nine were then answered. Those nine are the entire 5xx count of the run. The concurrent-user targets are cluster questions and nothing here speaks to them: at this size nobody ever queued at all.
+
+**What the run surfaced that is worth its own look**: `PaymentCaptured` arrived 247 times for SAGAs that had already terminated, and `seatrush_payment_replays_total{operation="CAPTURE"}` is the same 247. The capture retry of [§9.7](#97-saga-persistence) fired again while the first capture was still queued behind everything else, payment-service answered each repeat from the stored result, and order-service counted the extra replies as late and ignored them. `CAPTURE SUCCEEDED` is exactly 65, one per confirmed order, so the idempotency did its job and no money moved twice; what the figure says is that a saturated system makes four times the payment traffic it needs to.
+
+Each published run is one directory under `docs/benchmarks/<date>/`, holding the environment, everything the run printed, the Gatling report, the checker's own report, the Prometheus readings behind the table above, and screenshots of the three dashboards of [§14.4](#144-dashboards-and-alerts) at that run's time range. `make publish-run` is the command that collects them, and it refuses to publish a run whose invariants did not hold.
 
 ## 19. Tech Stack
 
@@ -1372,6 +1400,7 @@ make ui           # the frontend dev server, against the stack's gateway
 make ui-build     # format check, unit tests and bundle of the frontend
 make load-small   # 5,000-user load test followed by the invariant checker
 make load-full    # the benchmark of section 18.1, for a cluster and an injector
+make publish-run  # a run of it collected into docs/benchmarks/, if the invariants hold
 make chaos        # break what section 16 promises about, then check the invariants
 make check        # verify the invariants of section 4 against the running stack
 ```
@@ -1382,11 +1411,13 @@ The first `make up` builds seven images and takes a few minutes, most of it the 
 
 Then `make seed` creates an event through the public API and prints the two links to open it with. The sale opens two minutes later, which is time enough to open a second window and watch the venue fill from it.
 
-`make load-small` is the load test of [§18.1](#1811-how-it-is-run) against this stack, followed by the invariant checker on the sale it just made. It creates its own venue, opens the sale, and runs 5,000 buyers at 2,000 seats, which is a real flash on-sale: most buyers lose, and the question is whether losing is as fast and as correct as winning. On a machine that is also running the stack it is measuring, that size saturates the whole thing: 5,000 buyers against this Compose stack on one laptop produced 630 requests a second, a p99 of 17 seconds and 1% failures, almost all of them sockets the injector could not open and `503`s from a stack with nothing left to give. `LOAD_FLAGS` is how a run is scaled to the machine at hand, and a tenth of `small` fits comfortably:
+`make load-small` is the load test of [§18.1](#1811-how-it-is-run) against this stack, followed by the invariant checker on the sale it just made. It creates its own venue, opens the sale, and runs 5,000 buyers at 2,000 seats, which is a real flash on-sale: most buyers lose, and the question is whether losing is as fast and as correct as winning. On a machine that is also running the stack it is measuring, that size saturates the whole thing: 5,000 buyers against this Compose stack on one laptop produced 630 requests a second, a p99 of 17 seconds and 1% failures, almost all of them sockets the injector could not open and `503`s from a stack with nothing left to give. It is also not a figure to count on. The same command on the same machine, run again for [§18.2](#182-environment), went over the edge instead of up to it: 81% of the requests failed, nearly all of them connections closed under the injector or refused before they opened, and ten minutes of it sold no seats at all. `LOAD_FLAGS` is how a run is scaled to the machine at hand, and a tenth of `small` fits comfortably:
 
 ```bash
 make load-small LOAD_FLAGS="-Dseatrush.load.lobbyUsers=150 -Dseatrush.load.arrivingUsers=350   -Dseatrush.load.spectators=20 -Dseatrush.load.watchers=20   -Dseatrush.load.rows=5 -Dseatrush.load.seatsPerRow=10"
 ```
+
+`make publish-run` is the same run with its evidence kept. It records the environment before starting, runs the load test and the checker, takes the readings of [§18.3](#183-results) out of Prometheus, and moves the lot into `docs/benchmarks/<date>/` only if the invariants held, which is the rule [§18.1](#181-scenario) ends with. A run that failed them stays in `target/benchmark-run`, where it can be read and argued with. It takes the same `LOAD_FLAGS` as the two targets above, through `RUN_PROFILE` and the flags: `make publish-run RUN_PROFILE=full` is the benchmark, and the published run of [§18.3](#183-results) is the small one scaled down to the laptop it was made on.
 
 `make chaos` is the experiments of [§17.2](#172-the-chaos-experiments) against this stack. It is worth most in a second terminal while `make load-small` runs in the first: a service killed on an idle stack proves it restarts, and one killed mid-checkout proves the SAGA survived it.
 
@@ -1977,7 +2008,7 @@ The table is the index and nothing keeps an index honest by itself, so `scripts/
 | **M6 - Kubernetes** | Helm charts, HPA, KEDA, probes, PDBs, NetworkPolicies, hooks, kind setup | `make k8s-up` deploys the full system |
 | | *Arrived in three parts: the chart, the cluster and the hooks, which is what `make k8s-up` is ([§24.1](#241-the-chart), [§24.2](#242-the-local-cluster)); then the autoscaling of HPA and KEDA with the in-cluster Prometheus it reads ([§24.3](#243-autoscaling), [§24.4](#244-observability-in-the-cluster)); then the disruption, placement, graceful shutdown and NetworkPolicies ([§24.5](#245-disruption-and-placement), [§24.6](#246-graceful-shutdown), [§24.7](#247-networkpolicies)).* | |
 | **M7 - Benchmark and chaos** | Gatling scenarios, invariant checker, chaos scripts, published results | Results table filled, invariant checker green, chaos run documented |
-| | *Arriving in parts. The invariant checker of [§17.1](#171-the-invariant-checker) came first, because it is what every other part of this milestone is judged by: a load test with nothing to check it against produces a throughput figure and no verdict. Then the Gatling simulation of [§18.1.1](#1811-how-it-is-run), which is `make load-small` and `make load-full`. Then the chaos experiments of [§17.2](#172-the-chaos-experiments), which is `make chaos`. The published results of [§18.2](#182-environment) and [§18.3](#183-results) follow.* | |
+| | *Arrived in parts. The invariant checker of [§17.1](#171-the-invariant-checker) came first, because it is what every other part of this milestone is judged by: a load test with nothing to check it against produces a throughput figure and no verdict. Then the Gatling simulation of [§18.1.1](#1811-how-it-is-run), which is `make load-small` and `make load-full`. Then the chaos experiments of [§17.2](#172-the-chaos-experiments), which is `make chaos`. Then `make publish-run` and the run of [§18.2](#182-environment) and [§18.3](#183-results), which is a laptop-sized one: the scenario at the size [§18.1](#181-scenario) states needs a cluster and an injector of its own, and that run is the one thing in this table still owed.* | |
 | **M8 - Polish** | ADRs complete, OpenAPI and message docs, demo GIF, final README review | - |
 
 **Future work**: Avro + Schema Registry, multi-region active-passive, waitlist for sold-out events, bot-detection signals, CDC-based outbox relay (Debezium) as an alternative implementation, per-section Redis sharding.

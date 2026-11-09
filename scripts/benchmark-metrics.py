@@ -83,6 +83,43 @@ class Prometheus:
         return body["data"]
 
 
+def over_window(selector: str, start: int, by: str = "") -> str:
+    """What a counter counted during the run, as a PromQL expression evaluated at the end of it.
+
+    Not `increase()`, and that is the one thing in this file worth arguing about. A Micrometer
+    counter exists only once something has incremented it, so a series for `result="ok"` begins at
+    the first scrape after the first successful hold, and its first sample is however many happened
+    in those ten seconds rather than zero. `increase()` measures from the first sample it can see
+    inside the range and therefore loses everything before it: on the run published in section 18.3
+    it turned 77 successful holds into 18. It also extrapolates to the edges of the range, which
+    turned 247 late replies into 272. Both are wrong in a way that is invisible in the output.
+
+    So the window is subtracted rather than ranged over: the value now, minus the value at the
+    instant the run began, pinned with `@`. A series that did not exist then drops out of the
+    subtraction, and the `or` puts it back at its full value, which is the right answer precisely
+    because it started at zero during this run.
+
+    A counter that was reset in between, which means a service restarted mid run, makes this read
+    low and could make it negative. Nothing here hides that: a negative reading is printed as one,
+    and a restart during a published run is a fact about the run.
+    """
+    group = f" by ({by})" if by else ""
+    current = f"sum{group} ({selector})"
+    before = f"sum{group} ({selector} @ {start})"
+    return f"(({current}) - ({before})) or ({current})"
+
+
+def quantile(metric: str, selector: str, start: int, q: float) -> str:
+    """A percentile over the buckets of one histogram, in seconds.
+
+    Summed by `le` across services and replicas rather than read per series, because a bucket
+    counter is additive and the question is about the operation and not about which pod served it.
+    The buckets are differenced over the window the same way the counters above are, for the same
+    reason: a histogram that first published during the run has no earlier sample to range from.
+    """
+    return f"histogram_quantile({q}, {over_window(metric + '_bucket' + selector, start, 'le')})"
+
+
 def one(result: list[dict]) -> float | None:
     """The single number an aggregate query returns, or None when nothing matched.
 
@@ -98,9 +135,7 @@ def one(result: list[dict]) -> float | None:
 
 def labelled(result: list[dict], label: str) -> dict[str, float]:
     """A query grouped by one label, as a mapping, so the caller prints it in its own order."""
-    return {
-        sample["metric"].get(label, "(none)"): float(sample["value"][1]) for sample in result
-    }
+    return {sample["metric"].get(label, "(none)"): float(sample["value"][1]) for sample in result}
 
 
 def first_at(result: list[dict], predicate) -> tuple[int, float] | None:
@@ -111,18 +146,6 @@ def first_at(result: list[dict], predicate) -> tuple[int, float] | None:
             if predicate(value):
                 return int(float(timestamp)), value
     return None
-
-
-def quantile(metric: str, selector: str, window: int, q: float) -> str:
-    """A percentile over the buckets of one histogram, in seconds.
-
-    Summed by `le` across services and replicas rather than read per series, because a bucket
-    counter is additive and the question is about the operation and not about which pod served it.
-    `increase` over the whole window rather than a rate, so a run is measured by what happened in
-    it and the figure does not depend on when inside the window the load was.
-    """
-    inner = f"sum by (le) (increase({metric}_bucket{selector}[{window}s]))"
-    return f"histogram_quantile({q}, {inner})"
 
 
 def milliseconds(value: float | None) -> str:
@@ -156,24 +179,33 @@ def report(prometheus: Prometheus, event: str, start: int, end: int, out) -> Non
     def row(name: str, value: str, note: str = "") -> None:
         say(f"  {name:<{pad}}{value}{('   (' + note + ')') if note else ''}")
 
+    def counter(name: str, selector: str, note: str = "") -> None:
+        row(name, count(one(prometheus.instant(over_window(selector, start), end))), note)
+
+    def counters(prefix: str, selector: str, label: str) -> None:
+        grouped = labelled(
+            prometheus.instant(over_window(selector, start, label), end), label
+        )
+        if not grouped:
+            row(prefix, "no series")
+            return
+        for value, amount in sorted(grouped.items()):
+            row(f"{prefix} {value}", count(amount))
+
     say("the readings of README section 18.3, from Prometheus")
     say(f"  event                             {event}")
     say(f"  window                            {moment(start)} to {moment(end)}  ({window}s)")
     say(f"  prometheus                        {prometheus.url}")
+    say("  counters                          the value now minus the value when the run began")
     say()
 
     say("the venue")
     capacity = one(prometheus.instant(f"max(seatrush_seats_capacity{event_selector})", end))
     remaining = one(prometheus.instant(f"min(seatrush_seats_available{event_selector})", end))
-    sold = one(prometheus.instant(f"sum(increase(seatrush_seats_sold_total[{window}s]))", end))
     row("capacity", count(capacity))
     row("seats left at the end", count(remaining), f"sampled, +/-{SCRAPE_INTERVAL_SECONDS}s")
-    row("seats sold during the window", count(sold))
-    row(
-        "oversell prevented by the guard",
-        count(one(prometheus.instant(f"sum(increase(seatrush_oversell_prevented_total[{window}s]))", end))),
-        "must be 0",
-    )
+    counter("seats sold", "seatrush_seats_sold_total")
+    counter("oversell prevented by the guard", "seatrush_oversell_prevented_total", "must be 0")
     say()
 
     say("when it sold out")
@@ -199,59 +231,40 @@ def report(prometheus: Prometheus, event: str, start: int, end: int, out) -> Non
     say("the latencies of README section 15")
     # The two per endpoint figures are read on the service that serves the endpoint and never on
     # the gateway, which tags a proxied route uri=UNKNOWN (section 14.1).
+    # What each one is measured between is printed with it, because three of the four are spans
+    # nobody can guess from the name. The checkout in particular is the order row being created and
+    # the order being confirmed, which is the whole SAGA and not the request that started it.
     join = '{service="queue-service",uri="/api/events/{eventId}/queue"}'
-    for name, query in (
-        ("queue join p50", quantile("http_server_requests_seconds", join, window, 0.5)),
-        ("queue join p99", quantile("http_server_requests_seconds", join, window, 0.99)),
-        ("hold p50", quantile("seatrush_hold_duration_seconds", "", window, 0.5)),
-        ("hold p99", quantile("seatrush_hold_duration_seconds", "", window, 0.99)),
-        ("checkout p50", quantile("seatrush_saga_duration_seconds", "", window, 0.5)),
-        ("checkout p99", quantile("seatrush_saga_duration_seconds", "", window, 0.99)),
-        ("seat map propagation p50", quantile("seatrush_realtime_propagation_seconds", "", window, 0.5)),
-        ("seat map propagation p99", quantile("seatrush_realtime_propagation_seconds", "", window, 0.99)),
+    for name, metric, selector, note in (
+        ("queue join", "http_server_requests_seconds", join, "the request, on queue-service"),
+        ("hold", "seatrush_hold_duration_seconds", "", "the operation, on inventory-service"),
+        ("checkout", "seatrush_saga_duration_seconds", "", "order created to order confirmed"),
+        ("propagation", "seatrush_realtime_propagation_seconds", "", "seat moved to delta sent"),
     ):
-        row(name, milliseconds(one(prometheus.instant(query, end))), "bucket edge")
+        for label, q in (("p50", 0.5), ("p99", 0.99)):
+            query = quantile(metric, selector, start, q)
+            row(
+                f"{name} {label}",
+                milliseconds(one(prometheus.instant(query, end))),
+                f"{note}, between bucket edges",
+            )
     say()
 
     say("the holds")
-    for result, amount in labelled(
-        prometheus.instant(f"sum by (result) (increase(seatrush_holds_total[{window}s]))", end),
-        "result",
-    ).items():
-        row(f"holds {result}", count(amount))
-    row(
-        "holds released by the sweeper",
-        count(one(prometheus.instant(f"sum(increase(seatrush_holds_expired_total[{window}s]))", end))),
-    )
-    row(
-        "admissions",
-        count(one(prometheus.instant(f"sum(increase(seatrush_admissions_total[{window}s]))", end))),
-    )
+    counters("holds", "seatrush_holds_total", "result")
+    counter("holds frozen at checkout", "seatrush_holds_frozen_total")
+    counter("holds released by the sweeper", "seatrush_holds_expired_total")
+    counter("holds released on purpose", "seatrush_holds_released_total")
+    counter("admissions", "seatrush_admissions_total")
+    counters("slots freed", "seatrush_admission_slots_freed_total", "reason")
     say()
 
     say("the checkouts")
-    for result, amount in labelled(
-        prometheus.instant(
-            f"sum by (result) (increase(seatrush_checkout_started_total[{window}s]))", end
-        ),
-        "result",
-    ).items():
-        row(f"started {result}", count(amount))
-    compensations = labelled(
-        prometheus.instant(
-            f"sum by (reason) (increase(seatrush_saga_compensations_total[{window}s]))", end
-        ),
-        "reason",
-    )
-    if compensations:
-        for reason, amount in compensations.items():
-            row(f"compensated {reason}", count(amount))
-    else:
-        row("compensations", "no series")
-    row(
-        "stuck checkouts at the end",
-        count(one(prometheus.instant("max(seatrush_saga_stuck)", end))),
-    )
+    counters("started", "seatrush_checkout_started_total", "result")
+    counters("compensated", "seatrush_saga_compensations_total", "reason")
+    counters("late replies", "seatrush_saga_late_replies_total", "type")
+    counters("payment replays", "seatrush_payment_replays_total", "operation")
+    row("stuck checkouts at the end", count(one(prometheus.instant("max(seatrush_saga_stuck)", end))))
     say()
 
     say("the load it was under")
@@ -261,7 +274,7 @@ def report(prometheus: Prometheus, event: str, start: int, end: int, out) -> Non
     for name, query in (
         (
             "peak queued",
-            f"max_over_time((max(seatrush_queue_length{{event=\"{event}\",state=\"queued\"}}))[{window}s:{GAUGE_STEP_SECONDS}s])",
+            f'max_over_time((max(seatrush_queue_length{{event="{event}",state="queued"}}))[{window}s:{GAUGE_STEP_SECONDS}s])',
         ),
         (
             "peak in the purchase area",
@@ -280,14 +293,13 @@ def report(prometheus: Prometheus, event: str, start: int, end: int, out) -> Non
     say()
 
     say("what nothing is allowed to have")
-    for name, query in (
-        ("5xx answers", f'sum(increase(http_server_requests_seconds_count{{status=~"5.."}}[{window}s]))'),
-        ("duplicate messages skipped", f"sum(increase(seatrush_messages_duplicates_total[{window}s]))"),
-        ("seats fixed by the reconciler", f"sum(increase(seatrush_redis_reconciliations_total[{window}s]))"),
-        ("late replies", f"sum(increase(seatrush_saga_late_replies_total[{window}s]))"),
-        ("outbox lag at the end", "max(seatrush_outbox_lag_seconds)"),
-    ):
-        row(name, count(one(prometheus.instant(query, end))))
+    # By service, because a proxied request is counted twice: once by the service that answered and
+    # once by the gateway that passed it on, where it is tagged uri=UNKNOWN (section 14.1). Summed
+    # into one figure it would read as twice the requests that actually failed.
+    counters("5xx answers", 'http_server_requests_seconds_count{status=~"5.."}', "service")
+    counter("duplicate messages skipped", "seatrush_messages_duplicates_total")
+    counter("seats fixed by the reconciler", "seatrush_redis_reconciliations_total")
+    row("outbox lag at the end", count(one(prometheus.instant("max(seatrush_outbox_lag_seconds)", end))))
 
 
 def main(argv: list[str]) -> int:
@@ -303,7 +315,9 @@ def main(argv: list[str]) -> int:
     if arguments.end <= arguments.start:
         parser.error("--to is before --from, so there is no window to measure")
     try:
-        report(Prometheus(arguments.url), arguments.event, arguments.start, arguments.end, sys.stdout)
+        report(
+            Prometheus(arguments.url), arguments.event, arguments.start, arguments.end, sys.stdout
+        )
     except PrometheusError as error:
         print(f"the readings could not be taken: {error}", file=sys.stderr)
         return 2

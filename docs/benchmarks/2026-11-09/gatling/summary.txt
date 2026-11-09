@@ -1,0 +1,27 @@
+---- Global Information -------------------------------------------------------------|---Total---|-----OK----|----KO----
+> request count                                                                      |     5,912 |     5,912 |         -
+> min response time (ms)                                                             |         0 |         0 |         -
+> max response time (ms)                                                             |     5,979 |     5,979 |         -
+> mean response time (ms)                                                            |       365 |       365 |         -
+> response time std deviation (ms)                                                   |       613 |       613 |         -
+> response time 50th percentile (ms)                                                 |        86 |        86 |         -
+> response time 75th percentile (ms)                                                 |       468 |       468 |         -
+> response time 95th percentile (ms)                                                 |     1,569 |     1,569 |         -
+> response time 99th percentile (ms)                                                 |     2,771 |     2,771 |         -
+> mean throughput (rps)                                                              |     44.45 |     44.45 |         -
+---- Response Time Distribution ----------------------------------------------------------------------------------------
+> OK: t < 800 ms                                                                                          4,915 (83.14%)
+> OK: 800 ms <= t < 1200 ms                                                                                 477  (8.07%)
+> OK: t >= 1200 ms                                                                                          520   (8.8%)
+> KO                                                                                                          0     (0%)
+========================================================================================================================
+
+Reports generated, please open the following file: file:///C:/Users/talit/LocalDocuments/workspace/Portfolio_Gianluca/seatrush_main_folder/seatrush/load-tests/gatling/target/gatling/onsalesimulation-20261109192042092/index.html
+Global: count of failed events is 0.0 : true (actual : 0.0)
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  02:30 min
+[INFO] Finished at: 2026-11-09T20:22:57+01:00
+[INFO] ------------------------------------------------------------------------
+
