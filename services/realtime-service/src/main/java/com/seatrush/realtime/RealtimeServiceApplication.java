@@ -1,5 +1,8 @@
 package com.seatrush.realtime;
 
+import io.swagger.v3.oas.annotations.OpenAPIDefinition;
+import io.swagger.v3.oas.annotations.info.Info;
+import io.swagger.v3.oas.annotations.servers.Server;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
@@ -25,6 +28,22 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 // The batch window and the keep-alive are both passes on a schedule, on every pod at once. What
 // makes that safe is that a pod only ever writes to its own connections.
 @EnableScheduling
+// The document served at /v3/api-docs and published as docs/api/realtime-service.yaml. The
+// server is relative on purpose: left unset springdoc fills it in from the request that asked,
+// which is a different address in Compose, in the cluster and in the test that publishes this
+// file, and a published contract should not name whichever host generated it.
+@OpenAPIDefinition(
+    info =
+        @Info(
+            title = "SeatRush realtime-service",
+            version = "0.1.0",
+            description =
+                "The live half of the seat map: one stream carrying the seat changes of"
+                    + " each sale to the clients watching it (README section 6.6)."),
+    servers =
+        @Server(
+            url = "/",
+            description = "The service itself. The /api paths are reached through the gateway"))
 public class RealtimeServiceApplication {
 
   public static void main(String[] args) {

@@ -5,6 +5,7 @@ import com.seatrush.inventory.application.FreezeHoldCommand;
 import com.seatrush.inventory.application.FrozenHold;
 import com.seatrush.inventory.application.HoldFreezeService;
 import com.seatrush.inventory.domain.SeatPrice;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import java.util.List;
@@ -31,6 +32,11 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 @RequestMapping("/internal")
+@Tag(
+    name = "Internal",
+    description =
+        "Not exposed by the gateway, and called by another service or by an operator (README "
+            + "section 12.7)")
 public class InternalHoldController {
 
   private final HoldFreezeService freezes;

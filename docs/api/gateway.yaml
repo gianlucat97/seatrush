@@ -1,0 +1,60 @@
+openapi: 3.1.0
+info:
+  description: "The single entry point: every client request arrives here, and what\
+    \ is forwarded is a request whose caller is already known (README section 6.1).\
+    \ The routes it proxies are described by the services behind it; the one endpoint\
+    \ it answers itself is the demo login."
+  title: SeatRush gateway
+  version: 0.1.0
+servers:
+- description: "The gateway, which is the only address a client needs"
+  url: /
+tags:
+- description: "The demo login, which exists so a benchmark can be a repeatable set\
+    \ of buyers (README section 12.1)"
+  name: Auth
+paths:
+  /api/auth/demo-login:
+    post:
+      operationId: login
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DemoLoginRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DemoLoginResponse"
+          description: OK
+      tags:
+      - Auth
+components:
+  schemas:
+    DemoLoginRequest:
+      type: object
+      properties:
+        admin:
+          type: boolean
+        username:
+          type: string
+          maxLength: 60
+          minLength: 0
+      required:
+      - username
+    DemoLoginResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+        userId:
+          type: string
+          format: uuid
+        username:
+          type: string

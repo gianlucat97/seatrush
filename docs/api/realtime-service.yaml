@@ -1,0 +1,37 @@
+openapi: 3.1.0
+info:
+  description: "The live half of the seat map: one stream carrying the seat changes\
+    \ of each sale to the clients watching it (README section 6.6)."
+  title: SeatRush realtime-service
+  version: 0.1.0
+servers:
+- description: The service itself. The /api paths are reached through the gateway
+  url: /
+tags:
+- description: "Reading the catalog, an event and the seat map of a sale (README section\
+    \ 12.2)"
+  name: Events and seat map
+paths:
+  /api/events/{eventId}/seatmap/stream:
+    get:
+      operationId: stream
+      parameters:
+      - in: path
+        name: eventId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content:
+            text/event-stream:
+              schema:
+                type: string
+          description: "An open event stream. One DELTA event per batch, with a JSON\
+            \ body of {fromVersion, toVersion, changes}, and a comment line as a keep-alive.\
+            \ A gap between toVersion and the next fromVersion means a client has\
+            \ to reload the snapshot from inventory (README sections 8.4 and 12.2)"
+      tags:
+      - Events and seat map
+components: {}

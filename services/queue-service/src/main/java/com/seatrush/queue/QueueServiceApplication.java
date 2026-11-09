@@ -1,6 +1,9 @@
 package com.seatrush.queue;
 
 import com.seatrush.security.config.AdmissionTokenConfiguration;
+import io.swagger.v3.oas.annotations.OpenAPIDefinition;
+import io.swagger.v3.oas.annotations.info.Info;
+import io.swagger.v3.oas.annotations.servers.Server;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
@@ -30,6 +33,23 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 // pod at once: what makes that safe is the Lua scripts they call rather than a leader.
 @EnableScheduling
 @Import(AdmissionTokenConfiguration.class)
+// The document served at /v3/api-docs and published as docs/api/queue-service.yaml. The
+// server is relative on purpose: left unset springdoc fills it in from the request that asked,
+// which is a different address in Compose, in the cluster and in the test that publishes this
+// file, and a published contract should not name whichever host generated it.
+@OpenAPIDefinition(
+    info =
+        @Info(
+            title = "SeatRush queue-service",
+            version = "0.1.0",
+            description =
+                "The lobby, the FIFO waiting room, and the door that admits a bounded"
+                    + " number of buyers to a sale with a signed admission (README section"
+                    + " 6.2)."),
+    servers =
+        @Server(
+            url = "/",
+            description = "The service itself. The /api paths are reached through the gateway"))
 public class QueueServiceApplication {
 
   public static void main(String[] args) {

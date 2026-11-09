@@ -7,6 +7,7 @@ import com.seatrush.inventory.application.HoldService;
 import com.seatrush.inventory.application.PlaceHoldCommand;
 import com.seatrush.inventory.domain.Hold;
 import com.seatrush.inventory.domain.HoldResult;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
@@ -42,6 +43,11 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 @RequestMapping("/api")
+@Tag(
+    name = "Holds",
+    description =
+        "Taking seats off the map for the length of a countdown, and giving them back (README "
+            + "section 12.4)")
 public class HoldController {
 
   private final HoldService holds;

@@ -44,6 +44,15 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-actuator</artifactId>
     </dependency>
+
+    <!-- The OpenAPI document of this service, served at /v3/api-docs and published under
+         docs/api/ (README section 12). The WebFlux starter, because this process is reactive, and
+         it describes the one endpoint this service answers itself: the routes it proxies belong to
+         the services behind it and are documented by theirs. -->
+    <dependency>
+      <groupId>org.springdoc</groupId>
+      <artifactId>springdoc-openapi-starter-webflux-api</artifactId>
+    </dependency>
     <!-- The Prometheus registry and the shared meter configuration (README section 14.1).
          Without it the domain meters of this service exist only inside its own process:
          this is what puts them on /actuator/prometheus, with the histogram buckets the p99

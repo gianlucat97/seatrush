@@ -1,6 +1,7 @@
 package com.seatrush.gateway.adapters.in.web;
 
 import com.seatrush.gateway.application.DemoLogins;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,6 +25,11 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/auth")
 @Profile({"local", "bench"})
+@Tag(
+    name = "Auth",
+    description =
+        "The demo login, which exists so a benchmark can be a repeatable set of buyers (README "
+            + "section 12.1)")
 public class DemoLoginController {
 
   private static final Logger log = LoggerFactory.getLogger(DemoLoginController.class);

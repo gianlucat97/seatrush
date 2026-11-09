@@ -80,6 +80,20 @@ spring.task.scheduling.shutdown.await-termination-period: 10s
 server:
   port: ${SERVER_PORT:8083}
 
+# The OpenAPI document of README section 12, served at /v3/api-docs and published under docs/api/.
+# Both settings are about the bytes rather than the content: the published file is compared byte
+# for byte by the test that generates it, so the writer has to produce the same document twice.
+# Keys in a defined order instead of the order reflection happened to visit them in, and one
+# pretty printer instead of whichever one the response happened to be written with.
+springdoc:
+  writer-with-order-by-keys: true
+  writer-with-default-pretty-printer: true
+  # What these endpoints answer with, which the mappings do not say because there is nothing in
+  # Spring MVC that needs telling: a method returning a record produces JSON. Unset, springdoc
+  # describes every response as */*, which is true of the content negotiation and useless to a
+  # reader. The endpoints that produce something else say so on their own mapping and keep it.
+  default-produces-media-type: application/json
+
 management:
   endpoints:
     web:

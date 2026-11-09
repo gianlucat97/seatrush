@@ -1,5 +1,9 @@
 package com.seatrush.realtime.adapters.in.web;
 
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import java.util.UUID;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -25,6 +29,9 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
  */
 @RestController
 @RequestMapping("/api/events/{eventId}/seatmap")
+@Tag(
+    name = "Events and seat map",
+    description = "Reading the catalog, an event and the seat map of a sale (README section 12.2)")
 public class SeatMapStreamController {
 
   private final SeatMapStreams streams;
@@ -42,6 +49,21 @@ public class SeatMapStreamController {
    * one thing a client has to handle is a version gap, which every delta carries the means to
    * detect (README section 8.4).
    */
+  // What the published document would otherwise say here is the shape of SseEmitter, which is a
+  // Spring class with a timeout field and nothing a client ever receives. The body of this
+  // response is an event stream, whose grammar belongs to the SSE specification rather than to
+  // JSON Schema, so it is described as the text it is and the event names are named in the text.
+  @ApiResponse(
+      responseCode = "200",
+      description =
+          "An open event stream. One DELTA event per batch, with a JSON body of"
+              + " {fromVersion, toVersion, changes}, and a comment line as a keep-alive. A gap"
+              + " between toVersion and the next fromVersion means a client has to reload the"
+              + " snapshot from inventory (README sections 8.4 and 12.2)",
+      content =
+          @Content(
+              mediaType = MediaType.TEXT_EVENT_STREAM_VALUE,
+              schema = @Schema(type = "string")))
   @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
   public SseEmitter stream(@PathVariable UUID eventId) {
     return streams.open(eventId);

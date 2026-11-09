@@ -51,6 +51,15 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-actuator</artifactId>
     </dependency>
+
+    <!-- The OpenAPI document of this service, served at /v3/api-docs and published under
+         docs/api/ (README section 12). Compile scope rather than test: the document is derived
+         from the running context by the handler mappings springdoc inspects, so a document built
+         without it would describe a different application than the one deployed. -->
+    <dependency>
+      <groupId>org.springdoc</groupId>
+      <artifactId>springdoc-openapi-starter-webmvc-api</artifactId>
+    </dependency>
     <!-- The Prometheus registry and the shared meter configuration (README section 14.1).
          Without it the domain meters of this service exist only inside its own process:
          this is what puts them on /actuator/prometheus, with the histogram buckets the p99

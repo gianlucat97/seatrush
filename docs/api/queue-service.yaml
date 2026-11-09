@@ -1,0 +1,141 @@
+openapi: 3.1.0
+info:
+  description: "The lobby, the FIFO waiting room, and the door that admits a bounded\
+    \ number of buyers to a sale with a signed admission (README section 6.2)."
+  title: SeatRush queue-service
+  version: 0.1.0
+servers:
+- description: The service itself. The /api paths are reached through the gateway
+  url: /
+tags:
+- description: "Joining the queue for a sale, asking for a position, and the stream\
+    \ that pushes one (README section 12.3)"
+  name: Waiting room
+paths:
+  /api/events/{eventId}/queue:
+    delete:
+      operationId: leave
+      parameters:
+      - in: path
+        name: eventId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: header
+        name: X-User-Id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "204":
+          description: No Content
+      tags:
+      - Waiting room
+    post:
+      operationId: join
+      parameters:
+      - in: path
+        name: eventId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: header
+        name: X-User-Id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueuePlaceResponse"
+          description: OK
+      tags:
+      - Waiting room
+  /api/events/{eventId}/queue/me:
+    get:
+      operationId: me
+      parameters:
+      - in: path
+        name: eventId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: header
+        name: X-User-Id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueuePlaceResponse"
+          description: OK
+      tags:
+      - Waiting room
+  /api/events/{eventId}/queue/stream:
+    get:
+      operationId: stream
+      parameters:
+      - in: path
+        name: eventId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: header
+        name: X-User-Id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content:
+            text/event-stream:
+              schema:
+                type: string
+          description: "An open event stream, ending itself on ADMITTED and on SOLD_OUT.\
+            \ POSITION carries {eventId, position, estimatedWaitSeconds}, ADMITTED\
+            \ carries {eventId, admissionToken, admissionExpiresAt} and SOLD_OUT carries\
+            \ {eventId}. The field names are the ones queue/me answers with, so one\
+            \ parser serves both (README section 12.3)"
+      tags:
+      - Waiting room
+components:
+  schemas:
+    QueuePlaceResponse:
+      type: object
+      properties:
+        admissionExpiresAt:
+          type: string
+          format: date-time
+        admissionToken:
+          type: string
+        estimatedWaitSeconds:
+          type: integer
+          format: int64
+        eventId:
+          type: string
+          format: uuid
+        onSaleAt:
+          type: string
+          format: date-time
+        position:
+          type: integer
+          format: int64
+        state:
+          type: string
+          enum:
+          - LOBBY
+          - QUEUED
+          - ADMITTED
