@@ -17,6 +17,30 @@ function jsonResponse(status: number, body: unknown): Response {
 }
 
 describe('a request', () => {
+  /**
+   * The one test that is about the default rather than about a double.
+   *
+   * Every other test here injects its own `fetchImpl`, and a plain function does not care what it
+   * is called on. The browser's does: `fetch` stored on an object and called as a method of it is
+   * `Illegal invocation`, and the page that found this was showing "Loading the event" for ever.
+   */
+  it('calls the global fetch as the global, which is the only receiver a browser accepts', async () => {
+    const receivers: unknown[] = [];
+    const real = globalThis.fetch;
+    globalThis.fetch = function (this: unknown): Promise<Response> {
+      receivers.push(this);
+      return Promise.resolve(jsonResponse(200, []));
+    } as unknown as typeof fetch;
+
+    try {
+      await new ApiClient(() => 'a-token').events();
+    } finally {
+      globalThis.fetch = real;
+    }
+
+    expect(receivers).toEqual([globalThis]);
+  });
+
   it('carries the bearer token of the session', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, []));
     const client = new ApiClient(() => 'a-token', fetchImpl as unknown as typeof fetch);
