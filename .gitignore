@@ -33,6 +33,10 @@ dist/
 .env
 .env.local
 
+# Python, for the validators of scripts/
+__pycache__/
+*.py[cod]
+
 # Test and tool output
 *.log
 load-tests/gatling/target/
