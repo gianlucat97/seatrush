@@ -13,7 +13,7 @@ COMPOSE ?= docker compose --file $(COMPOSE_FILE) --env-file .env
 .DEFAULT_GOAL := help
 .PHONY: help format build test-it clean up down images seed ui ui-build
 .PHONY: k8s-up k8s-down k8s-seed k8s-status k8s-template load-small load-full
-.PHONY: chaos check message-docs api-docs publish-run
+.PHONY: chaos check message-docs api-docs publish-run demo-gif
 .PHONY: k8s-observability k8s-hpa k8s-grafana
 
 # The frontend is a Node project rather than a Maven module, so it has its own
@@ -144,6 +144,13 @@ RUN_PROFILE ?= small
 
 publish-run: ## A run of the benchmark published into docs/benchmarks/ (README section 18.2)
 	@./scripts/publish-run.sh $(RUN_PROFILE) $(LOAD_FLAGS)
+
+# Where the recording goes. The venue and the length are DEMO_FLAGS, DEMO_FRAMES and
+# DEMO_INTERVAL, which scripts/demo-gif.sh documents.
+DEMO_GIF ?= docs/demo.gif
+
+demo-gif: ## Record the seat map filling under load into docs/demo.gif (README section 6.7)
+	@./scripts/demo-gif.sh $(DEMO_GIF)
 
 # One experiment instead of all of them:
 #   make chaos EXPERIMENTS="kill-order stop-kafka"

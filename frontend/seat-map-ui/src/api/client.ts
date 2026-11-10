@@ -56,9 +56,18 @@ export class ApiClient {
   private readonly token: TokenSource;
   private readonly fetchImpl: typeof fetch;
 
+  /**
+   * The bound call is not a style choice and the page does not work without it.
+   *
+   * `fetch` is a method of the window, and it checks what it was called on: stored on this object
+   * and invoked as `this.fetchImpl(...)` it arrives with an `ApiClient` as its receiver, and every
+   * browser answers that with `Failed to execute 'fetch' on 'Window': Illegal invocation`. Node's
+   * `fetch` does not care, and neither does a test double, which is exactly why the default was
+   * the one path nothing ever exercised.
+   */
   constructor(token: TokenSource, fetchImpl: typeof fetch = globalThis.fetch) {
     this.token = token;
-    this.fetchImpl = fetchImpl;
+    this.fetchImpl = fetchImpl.bind(globalThis);
   }
 
   /**

@@ -4,6 +4,10 @@
 
 [![CI](https://github.com/gianlucat97/seatrush/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/gianlucat97/seatrush/actions/workflows/ci.yml)
 
+![A venue of 150 seats selling out under load, seen from the spectator view: green seats turning yellow as they are held and red as they are sold](docs/demo.gif)
+
+*The spectator view of [§6.7](#67-seat-map-ui-frontendseat-map-ui) during a run of the load test of [§18.1](#181-scenario): 400 buyers reaching for 150 seats, available in green, held in yellow, sold in red, and the counters at the top read off the same stream the map is. 106 seats sold in the minute this covers, and the pauses at either end are where nothing changed. Recorded by `make demo-gif`, which is [§23](#23-running-locally).*
+
 > Status: 🚧 under active development. This document is the technical specification of the system; values marked *Target* are goals, and [§18.3](#183-results) is the run that reports against them.
 
 ---
@@ -1228,10 +1232,12 @@ seatrush/
 │   │                               # the running service and compared against it by the build
 │   ├── messages/                   # JSON Schemas of the Kafka messages, generated and
 │   │                               # compared against the records by the build
-│   └── benchmarks/                 # one directory per published run of section 18.3,
-│                                   # collected by scripts/publish-run.sh
+│   ├── benchmarks/                 # one directory per published run of section 18.3,
+│   │                               # collected by scripts/publish-run.sh
+│   └── demo.gif                    # the recording at the top of this file
 ├── scripts/                        # seed.sh, check.sh, load.sh, chaos.sh, publish-run.sh
-│                                   # and the readings it takes, the two k8s scripts,
+│                                   # and the readings it takes, demo-gif.sh and the two
+│                                   # halves of a recording, the two k8s scripts,
 │                                   # the four CI validators
 ├── .github/workflows/
 │   ├── ci.yml                      # format check, the validators, build, unit + integration
@@ -1408,6 +1414,7 @@ make ui-build     # format check, unit tests and bundle of the frontend
 make load-small   # 5,000-user load test followed by the invariant checker
 make load-full    # the benchmark of section 18.1, for a cluster and an injector
 make publish-run  # a run of it collected into docs/benchmarks/, if the invariants hold
+make demo-gif     # record the seat map filling under load into docs/demo.gif
 make chaos        # break what section 16 promises about, then check the invariants
 make check        # verify the invariants of section 4 against the running stack
 ```
@@ -1425,6 +1432,8 @@ make load-small LOAD_FLAGS="-Dseatrush.load.lobbyUsers=150 -Dseatrush.load.arriv
 ```
 
 `make publish-run` is the same run with its evidence kept. It records the environment before starting, runs the load test and the checker, takes the readings of [§18.3](#183-results) out of Prometheus, and moves the lot into `docs/benchmarks/<date>/` only if the invariants held, which is the rule [§18.1](#181-scenario) ends with. A run that failed them stays in `target/benchmark-run`, where it can be read and argued with. It takes the same `LOAD_FLAGS` as the two targets above, through `RUN_PROFILE` and the flags: `make publish-run RUN_PROFILE=full` is the benchmark, and the published run of [§18.3](#183-results) is the small one scaled down to the laptop it was made on.
+
+`make demo-gif` is the recording at the top of this file, made again. It starts a load run, waits for the simulation to create its venue, opens the spectator view of [§6.7](#67-seat-map-ui-frontendseat-map-ui) on that sale in a headless browser, photographs it every three seconds while it fills, and writes the frames out as `docs/demo.gif`. Nothing is clicked and nothing is faked: the client is doing the job that view exists for, which is watching a load test fill a venue in real time. The venue is five blocks of thirty seats because that is what visibly sells out inside a minute at the one checkout a second this hardware manages ([§18.3](#183-results)); `DEMO_FLAGS`, `DEMO_FRAMES` and `DEMO_INTERVAL` move all three.
 
 `make chaos` is the experiments of [§17.2](#172-the-chaos-experiments) against this stack. It is worth most in a second terminal while `make load-small` runs in the first: a service killed on an idle stack proves it restarts, and one killed mid-checkout proves the SAGA survived it.
 
@@ -2017,7 +2026,7 @@ The table is the index and nothing keeps an index honest by itself, so `scripts/
 | **M7 - Benchmark and chaos** | Gatling scenarios, invariant checker, chaos scripts, published results | Results table filled, invariant checker green, chaos run documented |
 | | *Arrived in parts. The invariant checker of [§17.1](#171-the-invariant-checker) came first, because it is what every other part of this milestone is judged by: a load test with nothing to check it against produces a throughput figure and no verdict. Then the Gatling simulation of [§18.1.1](#1811-how-it-is-run), which is `make load-small` and `make load-full`. Then the chaos experiments of [§17.2](#172-the-chaos-experiments), which is `make chaos`. Then `make publish-run` and the run of [§18.2](#182-environment) and [§18.3](#183-results), which is a laptop-sized one: the scenario at the size [§18.1](#181-scenario) states needs a cluster and an injector of its own, and that run is the one thing in this table still owed.* | |
 | **M8 - Polish** | ADRs complete, OpenAPI and message docs, demo GIF, final README review | - |
-| | *Arriving in parts. The ADRs of [§25](#25-architecture-decision-records), the message schemas of [§17.3](#173-the-message-schemas) and the API documents of [§17.4](#174-the-api-specifications) came first. Then the review of this document, which is `scripts/check-readme.py` and the drift it found: five cross references that went somewhere other than where they said, a tree drawing two files that are not in the repository, and three tools listed in [§19](#19-tech-stack) that this project has never used. The demo GIF is what is left.* | |
+| | *Arrived in parts. The ADRs of [§25](#25-architecture-decision-records), the message schemas of [§17.3](#173-the-message-schemas) and the API documents of [§17.4](#174-the-api-specifications) came first. Then the review of this document, which is `scripts/check-readme.py` and the drift it found: five cross references that went somewhere other than where they said, a tree drawing two files that are not in the repository, and three tools listed in [§19](#19-tech-stack) that this project has never used. Then the recording at the top of this file, which is `make demo-gif` and which found that the client could not call its own API at all.* | |
 
 **Future work**: Avro + Schema Registry, multi-region active-passive, waitlist for sold-out events, bot-detection signals, CDC-based outbox relay (Debezium) as an alternative implementation, per-section Redis sharding.
 
