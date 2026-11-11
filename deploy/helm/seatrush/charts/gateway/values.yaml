@@ -3,10 +3,11 @@
 replicaCount: 1
 port: 8080
 
-# It reaches the four services it routes to over HTTP and nothing else: no database, no
-# broker, and the Redis of the rate limiting arrives with it.
+# It reaches the four services it routes to over HTTP, and Redis for the token buckets of
+# README section 13. No database and no broker: a bucket is one small hash that expires by
+# itself, so the limits are the only state this service touches and none of it is its own.
 needs:
-  redis: false
+  redis: true
   kafka: false
 
 env:

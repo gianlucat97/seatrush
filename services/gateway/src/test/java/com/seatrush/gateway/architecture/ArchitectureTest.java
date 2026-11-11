@@ -86,6 +86,8 @@ class ArchitectureTest {
           .definedBy("com.seatrush.gateway")
           .layer("Web")
           .definedBy("..adapters.in..")
+          .layer("Persistence")
+          .definedBy("..adapters.out..")
           .layer("Application")
           .definedBy("..application..")
           .layer("Domain")
@@ -94,8 +96,10 @@ class ArchitectureTest {
           .mayNotBeAccessedByAnyLayer()
           .whereLayer("Web")
           .mayNotBeAccessedByAnyLayer()
+          .whereLayer("Persistence")
+          .mayNotBeAccessedByAnyLayer()
           .whereLayer("Application")
           .mayOnlyBeAccessedByLayers("Web", "Bootstrap")
           .whereLayer("Domain")
-          .mayOnlyBeAccessedByLayers("Application", "Web", "Bootstrap");
+          .mayOnlyBeAccessedByLayers("Application", "Web", "Persistence", "Bootstrap");
 }

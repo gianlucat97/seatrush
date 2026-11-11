@@ -28,7 +28,7 @@ deny-all that is ingress from a pod which happens to be itself.
     "context" .
     "name" "redis"
     "component" "infrastructure"
-    "peers" (list "inventory-service" "queue-service")
+    "peers" (list "gateway" "inventory-service" "queue-service")
     "ports" (list .Values.global.redis.port)) }}
 ---
 {{ include "seatrush.component.networkpolicy" (dict

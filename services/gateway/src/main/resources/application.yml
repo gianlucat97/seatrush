@@ -14,6 +14,14 @@ spring:
       datetime:
         # Instants as ISO-8601 strings, the format README section 12 publishes.
         write-dates-as-timestamps: false
+  data:
+    redis:
+      # The token buckets of README section 13, and the only state this service touches. It is
+      # the same Redis the holds and the waiting room live in: a bucket is one small hash that
+      # expires by itself, so it costs the store nothing that a sale would notice, and a second
+      # Redis for it would be a second thing to run for no guarantee it buys.
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
   cloud:
     gateway:
       server:
@@ -48,6 +56,45 @@ seatrush:
     # admission: it only reads the ones the waiting room handed out.
     secret: ${SEATRUSH_ADMISSION_SECRET:}
     token-ttl: ${SEATRUSH_ADMISSION_TOKEN_TTL:10m}
+  ratelimit:
+    # Two buckets per scope, per user and per address (README sections 13 and 22). The per-user
+    # numbers are what one buyer may do; the per-address ones have to hold a whole office or a
+    # mobile carrier behind one address, so they are looser by two orders of magnitude and exist
+    # to stop a script rather than to shape a buyer.
+    #
+    # Off is a deployment decision and not a development one: a stack with no Redis would
+    # otherwise log a warning per request, and the limiter lets a request through when it cannot
+    # reach the store anyway.
+    enabled: ${SEATRUSH_RATELIMIT_ENABLED:true}
+    # Joining is one request a buyer makes once, so the burst is small and the sustained rate is
+    # the polling of a client that lost its stream rather than a rhythm anybody needs.
+    queue-join:
+      user:
+        burst: ${SEATRUSH_RATELIMIT_QUEUE_JOIN_BURST:10}
+        per-second: ${SEATRUSH_RATELIMIT_QUEUE_JOIN_PER_SECOND:2}
+      ip:
+        burst: ${SEATRUSH_RATELIMIT_QUEUE_JOIN_IP_BURST:500}
+        per-second: ${SEATRUSH_RATELIMIT_QUEUE_JOIN_IP_PER_SECOND:200}
+    # The expensive one, and the one a flash on-sale legitimately repeats: a buyer loses a seat
+    # to somebody else and reaches again, which the simulation of README section 18.1.1 does up
+    # to three times per attempt. The burst covers that with room to spare and still refuses a
+    # client making a hundred attempts a second.
+    hold:
+      user:
+        burst: ${SEATRUSH_RATELIMIT_HOLD_BURST:20}
+        per-second: ${SEATRUSH_RATELIMIT_HOLD_PER_SECOND:5}
+      ip:
+        burst: ${SEATRUSH_RATELIMIT_HOLD_IP_BURST:1000}
+        per-second: ${SEATRUSH_RATELIMIT_HOLD_IP_PER_SECOND:400}
+    # The tightest, because a buyer has one hold to turn into one order. What the burst leaves
+    # room for is the retry of a 503, which README section 12.6 says is safe to repeat.
+    order:
+      user:
+        burst: ${SEATRUSH_RATELIMIT_ORDER_BURST:5}
+        per-second: ${SEATRUSH_RATELIMIT_ORDER_PER_SECOND:1}
+      ip:
+        burst: ${SEATRUSH_RATELIMIT_ORDER_IP_BURST:300}
+        per-second: ${SEATRUSH_RATELIMIT_ORDER_IP_PER_SECOND:100}
 
 # How long this process is allowed to take to stop (README section 24.6). The chart gives a
 # pod 45 seconds and sleeps 5 of them before the signal; what is left for the process is 40,

@@ -95,7 +95,12 @@ Stated so that nobody reads a silence as a requirement.
   ([section 6.7](../../README.md#67-seat-map-ui-frontendseat-map-ui)), which is a design decision
   and not a conformance claim.
 - **Localisation.** Money carries a currency; nothing else is localised.
-- **The two unimplemented requirements** of
-  [chapter 6, open gaps](06-traceability.md#64-open-gaps) have no performance targets either,
-  because a target for something that does not exist would be the least useful line in this
-  document.
+- **The unimplemented requirement** of
+  [chapter 6, open gaps](06-traceability.md#64-open-gaps) has no performance target either, because
+  a target for something that does not exist would be the least useful line in this document.
+- **The rate limits of `FR-7.4`** have numbers but no measured figure. The defaults are chosen
+  against the shape of the sale in [section 18.1](../../README.md#181-scenario) rather than against
+  an observed rate, because the only published run is the laptop-sized one of 7.2 and it never
+  approached them: 400 buyers cannot exhaust a bucket meant to stop a script. What the limits have
+  behind them is the behaviour of a bucket, asserted against a real store, and not a figure saying
+  these are the right numbers for two hundred thousand buyers.

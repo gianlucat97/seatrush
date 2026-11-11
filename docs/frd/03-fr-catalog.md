@@ -1068,33 +1068,50 @@ checked by the service that owns the resource, from the identity the gateway est
 
 **Precondition**: none.
 
-**Main flow**: a token bucket per user and per IP on joining a queue, holding seats and creating
-orders. The limit is at the edge, so a refused request costs nothing downstream.
+**Main flow**: a token bucket per scope and per subject. Three scopes, because the three requests
+cost different amounts: joining a waiting room, holding seats, creating an order. Two subjects per
+scope, the caller and the address they came from, and two buckets are spent on every limited
+request with the stricter verdict winning. A bucket holds `burst` tokens and regains `per-second`
+of them each second, so a buyer who has been quiet is never delayed and a buyer who has been
+hammering is refused until the clock has put a token back.
+
+The limit is counted in the shared store rather than in a gateway process, because the limit has to
+belong to the deployment: four gateway pods each counting to twenty is a limit of eighty, and the
+autoscaler changes that number under exactly the load the limit exists for.
 
 **Alternative flows**:
 
-- Exceeding the limit is `429 RATE_LIMITED` with a `Retry-After` header.
+- Exceeding the limit is `429 RATE_LIMITED` with a `Retry-After` header, which carries the longer
+  of the two buckets waits. The refusal never reaches the service it was protecting.
+- The check is made **after** the admission of `FR-7.2`, so a purchase command with no turn is
+  refused by the cheaper check and spends no bucket at all. Somebody hammering a purchase command
+  without an admission therefore cannot make the gateway spend store round trips at the rate they
+  chose.
+- Reads are never limited. A read takes nothing from a sale, and polling an order is the one thing
+  a buyer past the pivot is told to do (`FR-4.4`).
+- Releasing a hold is never limited, although it is a purchase command, because it gives seats back:
+  refusing it would mean keeping seats off the market in order to protect the market.
+- **The store being unreachable lets the request through and counts it.** This is a decision and
+  not a gap: all three limited requests need that store further down anyway, so refusing them at the
+  edge would convert one outage into two, on the only process that could still answer a read. A
+  counter is what says the limits are not currently being applied.
 
 **Acceptance criteria**:
 
-1. A client over the limit is refused with a retry hint.
-2. The limit applies per user and per IP independently, so one buyer behind a shared address and
-   many buyers behind one address are both handled.
-
-> **Not implemented.** This requirement has no enforcement in the repository. What exists is the
-> vocabulary around it: `RATE_LIMITED` is defined as an error code and marked retryable in
-> `libs/common`, and the client already handles it if it ever arrives. What does not exist is
-> anything that produces it. There is no filter, no token bucket, no `seatrush.ratelimit.*`
-> configuration in the gateway, and the gateway has no Redis dependency to back a bucket with,
-> although [README section 6.1](../../README.md#61-gateway-servicesgateway),
-> [section 13](../../README.md#13-security) and
-> [section 22](../../README.md#22-configuration) all describe it as present.
->
-> It is kept here as a requirement rather than deleted because
-> [README section 2](../../README.md#2-goals-and-non-goals) puts rate limiting **in** scope as one
-> of the two halves of the abuse story, so removing it would be a change to the specification
-> rather than a correction to this document. Until it is built, `FR-7.5` is the only abuse limit
-> actually enforced. See [chapter 6, open gaps](06-traceability.md#64-open-gaps).
+1. A buyer may spend a whole burst at once and is refused on the next request, with the code and a
+   positive retry hint.
+2. A refused request never reaches the service behind the gateway.
+3. The clock putting one token back lets exactly one more request through, not the whole bucket.
+4. A bucket never refills beyond its burst, however long a buyer was away.
+5. One buyer exhausting their bucket leaves another buyer's bucket full.
+6. The three scopes are three buckets: exhausting one leaves the others untouched.
+7. Everybody behind one address shares a bucket, and a different address is a different bucket.
+8. The address is read from the end of the forwarding chain the trusted proxy appended to, so a
+   client cannot reset its own address bucket by sending a header.
+9. Reads are not limited, however many a just-refused buyer makes.
+10. Every bucket has a lifetime, so a flash on-sale leaves no bucket keys behind it.
+11. The limit applies to the deployment rather than to a pod, and is enforced in one atomic step so
+    that two pods taking one caller's two clicks in the same instant are serialised.
 
 ### FR-7.5 Limit what one buyer can take
 

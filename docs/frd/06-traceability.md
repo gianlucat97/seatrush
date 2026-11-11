@@ -89,7 +89,7 @@ Paths are relative to the repository root.
 | `FR-7.1` | [section 6.1](../../README.md#61-gateway-servicesgateway), [section 13](../../README.md#13-security) | - | `JwtCodecTest`, `UserTokenTest`, `UserTokenSignerTest`, `SecurityAutoConfigurationTest`, `GatewayEdgeIT.refusesARequestThatCarriesNoToken`, `GatewayEdgeIT.refusesATokenItDidNotSign`, `GatewayEdgeIT.refusesATokenThatHasExpired`, `GatewayEdgeIT.writesTheIdentityHeaderFromTheTokenAndDropsTheOneTheClientSent`, `DemoLoginsTest`. **HS256 only**: see [open gaps](#64-open-gaps) |
 | `FR-7.2` | [section 6.1](../../README.md#61-gateway-servicesgateway), [section 13](../../README.md#13-security) | [ADR-0014](../adr/0014-admission-as-a-signed-bearer-token.md), [ADR-0016](../adr/0016-admission-tokens-minted-on-read.md) | `PurchaseCommandTest`, `TokenSecretsTest`, `TokenConfigurationTest`, `GatewayEdgeIT.refusesAHoldWithoutAnAdmission`, `GatewayEdgeIT.refusesAnAdmissionForAnotherSale`, `GatewayEdgeIT.needsNoAdmissionToWatchASeatMap` |
 | `FR-7.3` | [section 13](../../README.md#13-security), [section 12.4](../../README.md#124-holds) | - | `GatewayEdgeIT.refusesAnAdminEndpointToAnOrdinaryBuyer`, `GatewayEdgeIT.letsAnOperatorThroughToTheAdminEndpoints`, `HoldControllerTest`, `CheckoutIT.anOrderOfAnotherUserIsNotInThisUsersList` |
-| `FR-7.4` | [section 6.1](../../README.md#61-gateway-servicesgateway), [section 13](../../README.md#13-security), [section 22](../../README.md#22-configuration) | - | **Nothing.** `ErrorCodeTest` covers the error code and its retryability, and nothing produces it. See [open gaps](#64-open-gaps) |
+| `FR-7.4` | [section 6.1](../../README.md#61-gateway-servicesgateway), [section 13](../../README.md#13-security), [section 22](../../README.md#22-configuration) | [ADR-0022](../adr/0022-token-buckets-in-redis-at-the-edge.md) | `RateLimitedRequestTest`, `RateLimitVerdictTest`, `RateLimitPropertiesTest`, `RateLimitIT` (all sixteen), in particular `refusesTheRequestAfterTheBurstWithTheCodeAndTheRetryHint`, `aRefusedRequestNeverReachesInventory`, `putsBackWhatTheRateSaysAndNotTheWholeBucket`, `limitsEverybodyBehindOneAddressTogether`, `countsTwoSpoofedHeadersWithTheSameLastHopAsOneAddress`, `refusesAHoldWithNoAdmissionWithoutSpendingABucket` |
 | `FR-7.5` | [section 13](../../README.md#13-security), [section 22](../../README.md#22-configuration) | [ADR-0012](../adr/0012-one-active-hold-per-user-per-event.md) | `HoldControllerTest`, `HoldIT.aUserHoldsOnlyOneSetOfSeatsPerEvent`, `HoldIT.fiveHundredConcurrentAttemptsByOneUserHoldOneSetOfSeats`, and `I8` of the checker |
 | `FR-7.6` | [section 9.4](../../README.md#94-idempotency), [section 9.5](../../README.md#95-transactional-outbox-postgres-and-redis), [section 10.2](../../README.md#102-message-envelope) | [ADR-0003](../adr/0003-transactional-outbox-with-polling-relay.md), [ADR-0007](../adr/0007-json-messages-with-schema-version.md) | `IdempotentConsumerTest`, `IdempotentConsumerIT`, `MessageConsumerIT`, `PaymentIT.aRedeliveredCommandIsPerformedOnce`, `PaymentIT.aResentCommandIsPerformedOnceAndAnsweredAgain`, `PaymentIT.aCaptureWithoutAnAuthorizationEndsInTheDeadLetterTopic` |
 
@@ -139,22 +139,17 @@ misleading the next reader.
 
 ## 6.4 Open gaps
 
-Two requirements of [chapter 3](03-fr-catalog.md) have no implementation behind them. Both are
-stated as present in the README, and both were found by writing this chapter: the third column is
-what makes a gap like this impossible to leave implicit.
+One requirement of [chapter 3](03-fr-catalog.md) has no implementation behind it. It is stated as
+present in the README, and it was found by writing this chapter: the third column is what makes a
+gap like this impossible to leave implicit.
 
-Neither is a defect in the system as built. Both are a disagreement between the specification and
-the repository, and the specification is the half that is currently wrong.
+It is not a defect in the system as built. It is a disagreement between the specification and the
+repository, and the specification is the half that is currently wrong.
 
-### FR-7.4, rate limiting: not implemented
-
-| | |
-|---|---|
-| **Claimed in** | [section 6.1](../../README.md#61-gateway-servicesgateway) ("token-bucket rate limiting per user and per IP, backed by Redis"), [section 13](../../README.md#13-security), [section 22](../../README.md#22-configuration) (a `seatrush.ratelimit.*` row) |
-| **What exists** | `RATE_LIMITED` as an error code in `libs/common`, marked retryable and covered by `ErrorCodeTest`; the client handles the code if it arrives |
-| **What does not** | Any enforcement. No filter, no bucket, no `seatrush.ratelimit.*` property in the gateway configuration, and no Redis dependency in the gateway to back a bucket with |
-| **Consequence** | `FR-7.5`, one hold per buyer and a maximum per hold, is the only abuse limit actually enforced. [Section 2](../../README.md#2-goals-and-non-goals) puts rate limiting in scope as one of the two halves of the abuse story, and today only one half is there |
-| **To close it** | Either build it, or move it to the non-goals and future work of [section 26](../../README.md#26-roadmap). Both are decisions about the product, not about this document |
+**Closed since this chapter was first written**: `FR-7.4`, rate limiting, which had no enforcement
+at all and now has the token buckets of
+[ADR-0022](../adr/0022-token-buckets-in-redis-at-the-edge.md) and the sixteen tests named in its
+row above.
 
 ### FR-7.1, RS256 with JWKS: not implemented
 

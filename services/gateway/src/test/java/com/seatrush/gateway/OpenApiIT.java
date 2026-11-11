@@ -28,7 +28,11 @@ import org.springframework.test.web.reactive.server.WebTestClient;
  * gets to make. In the cluster each service answers its own {@code /v3/api-docs} on its own port,
  * which the gateway does not route at all.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(
+    webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+    // Nothing here is a limited request, and a context that goes looking for the Redis of the
+    // token buckets would spend a connection timeout saying so at startup.
+    properties = "seatrush.ratelimit.enabled=false")
 @AutoConfigureWebTestClient
 @ActiveProfiles("local")
 class OpenApiIT {
