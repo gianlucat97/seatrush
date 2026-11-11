@@ -13,6 +13,14 @@
 #
 # Anything after the profile is handed to Maven, which is how one knob of section 18.1 is changed
 # without a third preset. SEATRUSH_API_URL moves the target, the way it does for scripts/seed.sh.
+#
+# CHECK_FLAGS moves the second half, and it exists because the first half can already be pointed
+# anywhere. A cluster publishes no store ports, so the checker reads it through port forwards and
+# flags that say so (section 17.1): without this, `make load-full` against the cluster it is
+# written for would run the benchmark and then fail to check it, every time.
+#
+#   SEATRUSH_API_URL=http://localhost:8088 \
+#     CHECK_FLAGS="--postgres-port 15432 --redis-port 16379" ./scripts/load.sh small
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -65,7 +73,8 @@ echo "== the invariants of the sale that was just run (README section 17.1)"
 # The one event the run created, and not the whole catalog: a laptop that has been demoed on for a
 # week has older sales in it whose state says nothing about this run.
 CHECK_STATUS=0
-./scripts/check.sh --event "$EVENT" || CHECK_STATUS=$?
+# shellcheck disable=SC2086
+./scripts/check.sh --event "$EVENT" $CHECK_FLAGS || CHECK_STATUS=$?
 
 echo
 if [ "$LOAD_STATUS" -ne 0 ]; then

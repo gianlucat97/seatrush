@@ -183,7 +183,13 @@ api-docs: ## Regenerate the OpenAPI documents of docs/api/ from the six services
 #   make check CHECK_FLAGS="--settle-timeout 0"      look at a sale that is still running
 #   make check CHECK_FLAGS="--event <uuid>"          one event of a catalog with several
 # ./scripts/check.sh --help lists them all.
+#
+# Exported, because the checker is also the second half of a load run and of a published run, and
+# those two reach it through scripts/load.sh rather than through this file. A cluster is where that
+# matters: there the stores are read through port forwards and every one of the three commands
+# needs to be told so.
 CHECK_FLAGS ?=
+export CHECK_FLAGS
 
 check: ## Verify the invariants of README section 4 against the running stack
 	@./scripts/check.sh $(CHECK_FLAGS)

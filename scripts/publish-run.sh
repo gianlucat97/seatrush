@@ -20,12 +20,32 @@
 # a second run on one day and for a run being redone: without it, a directory that already exists is
 # refused rather than overwritten, because a published run is evidence and not a build output.
 #
+# Against a cluster it is those three plus CHECK_FLAGS, because a cluster publishes no store ports
+# and the checker reads the stores directly (section 17.1). The environment it records is the
+# cluster's rather than Compose's, detected and not configured:
+#
+#   kubectl --namespace seatrush port-forward svc/seatrush-postgres 15432:5432 &
+#   kubectl --namespace seatrush port-forward svc/seatrush-redis 16379:6379 &
+#   kubectl --namespace seatrush-observability port-forward svc/prometheus 19090:9090 &
+#   SEATRUSH_API_URL=http://localhost:8088 PROMETHEUS_URL=http://localhost:19090 \
+#     CHECK_FLAGS="--postgres-port 15432 --redis-port 16379" ./scripts/publish-run.sh small
+#
 # What it does not do is write the results table. The table of section 18.3 and the environment of
 # section 18.2 are read out of these artifacts by whoever publishes the run: a figure in a README is
 # a claim somebody is making, and the point of this directory is that the claim can be checked.
 set -eu
 
 cd "$(dirname "$0")/.."
+
+# Print what this run would record about its environment, and stop. A published run takes an hour
+# of a machine and the environment is the half of it that cannot be taken again afterwards, so
+# being able to read it first is worth four lines. It is also the only way to exercise the cluster
+# branch below without a benchmark attached to it.
+ENVIRONMENT_ONLY=0
+if [ "${1:-}" = "--environment" ]; then
+  ENVIRONMENT_ONLY=1
+  shift
+fi
 
 PROFILE="${1:-small}"
 if [ $# -gt 0 ]; then
@@ -57,6 +77,34 @@ fi
 API="${SEATRUSH_API_URL:-http://localhost:8080}"
 PROMETHEUS="${PROMETHEUS_URL:-http://localhost:9090}"
 GRAFANA="${GRAFANA_URL:-http://localhost:3000}"
+K8S_NAMESPACE="${K8S_NAMESPACE:-seatrush}"
+K8S_RELEASE="${K8S_RELEASE:-seatrush}"
+
+# Which stack this run is against, detected the way scripts/chaos.sh detects it and for the same
+# reason: the answer is observable, and getting it wrong would describe the environment of a stack
+# that was not the one measured. SEATRUSH_BACKEND decides it on a host where both are up.
+backend() {
+  if [ -n "${SEATRUSH_BACKEND:-}" ]; then
+    echo "$SEATRUSH_BACKEND"
+    return
+  fi
+  if docker compose --file deploy/docker-compose/docker-compose.yml --env-file .env \
+    ps --status running --quiet 2>/dev/null | grep -q .; then
+    echo compose
+    return
+  fi
+  if kubectl --namespace "$K8S_NAMESPACE" get pods --no-headers 2>/dev/null | grep -q .; then
+    echo k8s
+    return
+  fi
+  echo unknown
+}
+BACKEND=$(backend)
+
+# A cluster publishes no store ports, so the checker is pointed at port forwards there (section
+# 17.1). Passed through rather than guessed, for the same reason the addresses above are.
+CHECK_FLAGS="${CHECK_FLAGS:-}"
+export CHECK_FLAGS
 
 # Staged under target/ and not under docs/, so a failed run cannot leave half a publication in the
 # tree. Nothing here is committed until the last step moves it.
@@ -65,20 +113,24 @@ GATLING=load-tests/gatling/target/gatling
 EVENT_ID_FILE="$GATLING/event-id.txt"
 
 DESTINATION="${SEATRUSH_RUN_DIR:-docs/benchmarks/$(date -u +%Y-%m-%d)}"
-if [ -e "$DESTINATION" ]; then
+if [ "$ENVIRONMENT_ONLY" = "0" ] && [ -e "$DESTINATION" ]; then
   echo "$DESTINATION already holds a published run." >&2
   echo "Name another with SEATRUSH_RUN_DIR, or remove that one on purpose." >&2
   exit 2
 fi
 
-if ! curl --silent --max-time 5 --output /dev/null "$API/api/events"; then
-  echo "the gateway does not answer at $API. Start the stack with make up." >&2
-  exit 2
-fi
-if ! curl --silent --max-time 5 --output /dev/null "$PROMETHEUS/-/healthy"; then
-  echo "Prometheus does not answer at $PROMETHEUS, so three rows of section 18.3 would be" >&2
-  echo "unmeasurable. Point PROMETHEUS_URL at it, or port forward it out of a cluster." >&2
-  exit 2
+# Not in --environment mode: describing a stack is worth doing while it is still starting, and
+# what that mode is for is reading the description before committing an hour to the run.
+if [ "$ENVIRONMENT_ONLY" = "0" ]; then
+  if ! curl --silent --max-time 5 --output /dev/null "$API/api/events"; then
+    echo "the gateway does not answer at $API. Start the stack with make up." >&2
+    exit 2
+  fi
+  if ! curl --silent --max-time 5 --output /dev/null "$PROMETHEUS/-/healthy"; then
+    echo "Prometheus does not answer at $PROMETHEUS, so three rows of section 18.3 would be" >&2
+    echo "unmeasurable. Point PROMETHEUS_URL at it, or port forward it out of a cluster." >&2
+    exit 2
+  fi
 fi
 
 rm -rf "$STAGE"
@@ -114,10 +166,18 @@ environment() {
   echo "  cores it was given                $(docker info --format '{{.NCPU}}' 2>/dev/null || echo unknown)"
   echo "  memory it was given               $(docker info --format '{{.MemTotal}}' 2>/dev/null || echo unknown) bytes"
   echo
-  # The one part of the environment that is not in the repository. .env is git ignored and it holds
-  # the door of the sale: a run made with a purchase area of 5,000 and one made with 40 are two
-  # different scenarios, and without these lines nobody could tell which one produced the figures.
-  # The secrets are named and not printed, because what matters is that they were set.
+  if [ "$BACKEND" = "k8s" ]; then
+    cluster_environment
+  else
+    compose_environment
+  fi
+}
+
+# The one part of a Compose environment that is not in the repository. .env is git ignored and it
+# holds the door of the sale: a run made with a purchase area of 5,000 and one made with 40 are two
+# different scenarios, and without these lines nobody could tell which one produced the figures.
+# The secrets are named and not printed, because what matters is that they were set.
+compose_environment() {
   echo "the knobs of section 22 this stack was started with"
   if [ -f .env ]; then
     awk -F= '/^SEATRUSH_[A-Z0-9_]+=/ {
@@ -132,9 +192,43 @@ environment() {
   echo
   echo "one replica of each unless this table says otherwise"
   docker compose --file deploy/docker-compose/docker-compose.yml --env-file .env images 2>/dev/null \
-    || echo "  not a Compose stack: record the replicas and the node sizes by hand"
+    || echo "  the Compose stack could not be described: record the images by hand"
+}
+
+# What section 18.2 asks for in so many words: the cluster type and the node sizes, the replicas per
+# service, and the sizing of the three stores. All of it read from the cluster rather than from the
+# chart, because what a release asked for and what it got are two different facts and only the
+# second one produced the figures.
+cluster_environment() {
+  echo "the cluster"
+  echo "  context                           $(kubectl config current-context 2>/dev/null || echo unknown)"
+  echo "  namespace                         $K8S_NAMESPACE"
+  kubectl get nodes -o custom-columns=\
+'NAME:.metadata.name,ROLES:.metadata.labels.kubernetes\.io/role,CPU:.status.capacity.cpu,'\
+'MEMORY:.status.capacity.memory,KUBELET:.status.nodeInfo.kubeletVersion' 2>/dev/null \
+    | sed 's/^/  /' || echo "  the nodes could not be read"
+  echo
+  # Deployments and stateful sets together, because the three stores are the second kind and their
+  # sizing is as much a part of a benchmark as the replica count of the services.
+  echo "what was running, and the images it was running"
+  kubectl get deploy,sts --namespace "$K8S_NAMESPACE" -o wide 2>/dev/null | sed 's/^/  /' \
+    || echo "  nothing answered in namespace $K8S_NAMESPACE"
+  echo
+  # A run under an autoscaler has no single replica count, which is a fact about the run rather
+  # than a gap in this file: the table above is the end state and this is the range it moved in.
+  echo "what the autoscalers of section 24.3 were allowed to do to that"
+  kubectl get hpa,scaledobject --namespace "$K8S_NAMESPACE" 2>/dev/null | sed 's/^/  /' \
+    || echo "  none installed"
+  echo
+  echo "the values this release was installed with, over the defaults of the chart"
+  helm get values "$K8S_RELEASE" --namespace "$K8S_NAMESPACE" 2>/dev/null | sed 's/^/  /' \
+    || echo "  no release named $K8S_RELEASE: record the configuration by hand"
 }
 environment > "$STAGE/environment.txt"
+if [ "$ENVIRONMENT_ONLY" = "1" ]; then
+  cat "$STAGE/environment.txt"
+  exit 0
+fi
 
 # ---------------------------------------------------------------------------------------
 # The run.
@@ -190,7 +284,9 @@ fi
 # never writes, calls no service and has no state, so a run can be checked twice. What that buys is
 # a file that is exactly the checker's own report, with no load test wrapped around it.
 CHECK_STATUS=0
-./scripts/check.sh --event "$EVENT" > "$STAGE/invariant-checker.txt" 2>&1 || CHECK_STATUS=$?
+# shellcheck disable=SC2086
+./scripts/check.sh --event "$EVENT" $CHECK_FLAGS > "$STAGE/invariant-checker.txt" 2>&1 \
+  || CHECK_STATUS=$?
 
 METRICS_STATUS=0
 $PYTHON scripts/benchmark-metrics.py \
