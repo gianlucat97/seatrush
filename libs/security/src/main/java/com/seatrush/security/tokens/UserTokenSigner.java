@@ -24,7 +24,7 @@ import javax.crypto.spec.SecretKeySpec;
  * because something has to be able to read a token back in a test without a running gateway, and
  * because a token format with two implementations has two behaviours.
  */
-public final class UserTokenSigner {
+public final class UserTokenSigner implements UserTokens {
 
   static final String USERNAME_CLAIM = "username";
   static final String ROLES_CLAIM = "roles";
@@ -66,6 +66,7 @@ public final class UserTokenSigner {
    * @throws TokenException if it was not signed by this secret for users, has expired, or is
    *     missing a claim this build needs
    */
+  @Override
   public UserToken verify(String token) {
     JWTClaimsSet claims = codec.verify(token);
     return new UserToken(

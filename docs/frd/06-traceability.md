@@ -86,7 +86,7 @@ Paths are relative to the repository root.
 
 | Req | Designed in | Decided by | Proved by |
 |---|---|---|---|
-| `FR-7.1` | [section 6.1](../../README.md#61-gateway-servicesgateway), [section 13](../../README.md#13-security) | - | `JwtCodecTest`, `UserTokenTest`, `UserTokenSignerTest`, `SecurityAutoConfigurationTest`, `GatewayEdgeIT.refusesARequestThatCarriesNoToken`, `GatewayEdgeIT.refusesATokenItDidNotSign`, `GatewayEdgeIT.refusesATokenThatHasExpired`, `GatewayEdgeIT.writesTheIdentityHeaderFromTheTokenAndDropsTheOneTheClientSent`, `DemoLoginsTest`. **HS256 only**: see [open gaps](#64-open-gaps) |
+| `FR-7.1` | [section 6.1](../../README.md#61-gateway-servicesgateway), [section 13](../../README.md#13-security), [section 22](../../README.md#22-configuration) | [ADR-0023](../adr/0023-user-identities-from-a-jwks-provider.md) | **HS256**: `JwtCodecTest`, `UserTokenTest`, `UserTokenSignerTest`, `SecurityAutoConfigurationTest`, `DemoLoginsTest`, `GatewayEdgeIT.refusesARequestThatCarriesNoToken`, `GatewayEdgeIT.refusesATokenItDidNotSign`, `GatewayEdgeIT.refusesATokenThatHasExpired`, `GatewayEdgeIT.writesTheIdentityHeaderFromTheTokenAndDropsTheOneTheClientSent`. **RS256 and JWKS**: `JwksUserTokensTest` (all twenty-eight), `TokenConfigurationTest.wiresTheSignerOnALaptopAndOnlyAReaderWithAnIdentityProvider`, `TokenConfigurationTest.refusesToStartWithAJwksEndpointAndNoIssuerOrAudience`, `TokenConfigurationTest.treatsAnEmptyJwksEndpointAsNoIdentityProvider`, `IdentityProviderIT` (all eleven), in particular `holdsNoKeyThatCouldMintAUserIdentity`, `handsDownstreamAStableUuidForAProviderSubjectThatIsNotOne`, `refusesATokenMintedForAnotherApplicationOfTheSameProvider`, `hasNoDemoLogin` |
 | `FR-7.2` | [section 6.1](../../README.md#61-gateway-servicesgateway), [section 13](../../README.md#13-security) | [ADR-0014](../adr/0014-admission-as-a-signed-bearer-token.md), [ADR-0016](../adr/0016-admission-tokens-minted-on-read.md) | `PurchaseCommandTest`, `TokenSecretsTest`, `TokenConfigurationTest`, `GatewayEdgeIT.refusesAHoldWithoutAnAdmission`, `GatewayEdgeIT.refusesAnAdmissionForAnotherSale`, `GatewayEdgeIT.needsNoAdmissionToWatchASeatMap` |
 | `FR-7.3` | [section 13](../../README.md#13-security), [section 12.4](../../README.md#124-holds) | - | `GatewayEdgeIT.refusesAnAdminEndpointToAnOrdinaryBuyer`, `GatewayEdgeIT.letsAnOperatorThroughToTheAdminEndpoints`, `HoldControllerTest`, `CheckoutIT.anOrderOfAnotherUserIsNotInThisUsersList` |
 | `FR-7.4` | [section 6.1](../../README.md#61-gateway-servicesgateway), [section 13](../../README.md#13-security), [section 22](../../README.md#22-configuration) | [ADR-0022](../adr/0022-token-buckets-in-redis-at-the-edge.md) | `RateLimitedRequestTest`, `RateLimitVerdictTest`, `RateLimitPropertiesTest`, `RateLimitIT` (all sixteen), in particular `refusesTheRequestAfterTheBurstWithTheCodeAndTheRetryHint`, `aRefusedRequestNeverReachesInventory`, `putsBackWhatTheRateSaysAndNotTheWholeBucket`, `limitsEverybodyBehindOneAddressTogether`, `countsTwoSpoofedHeadersWithTheSameLastHopAsOneAddress`, `refusesAHoldWithNoAdmissionWithoutSpendingABucket` |
@@ -139,24 +139,25 @@ misleading the next reader.
 
 ## 6.4 Open gaps
 
-One requirement of [chapter 3](03-fr-catalog.md) has no implementation behind it. It is stated as
-present in the README, and it was found by writing this chapter: the third column is what makes a
-gap like this impossible to leave implicit.
+**None.** Every requirement of [chapter 3](03-fr-catalog.md) has an implementation and a test in
+the third column above.
 
-It is not a defect in the system as built. It is a disagreement between the specification and the
-repository, and the specification is the half that is currently wrong.
+That was not true when this chapter was first written, and the two requirements it was not true of
+are the reason the chapter exists. Both were stated as present in the README, both were absent from
+the repository, and neither was visible from reading the code: what made them visible was having to
+name, for every requirement, the test that proves it.
 
-**Closed since this chapter was first written**: `FR-7.4`, rate limiting, which had no enforcement
-at all and now has the token buckets of
-[ADR-0022](../adr/0022-token-buckets-in-redis-at-the-edge.md) and the sixteen tests named in its
-row above.
+| Was open | What was missing | Closed by |
+|---|---|---|
+| `FR-7.4`, rate limiting | Any enforcement at all. `RATE_LIMITED` existed as an error code that nothing produced, while [section 6.1](../../README.md#61-gateway-servicesgateway), [section 13](../../README.md#13-security) and [section 22](../../README.md#22-configuration) all described a token bucket backed by Redis | [ADR-0022](../adr/0022-token-buckets-in-redis-at-the-edge.md): token buckets in Redis, three scopes, two subjects, and the sixteen tests of `RateLimitIT` |
+| `FR-7.1`, RS256 with JWKS | The whole RS256 path. [Section 13](../../README.md#13-security) stated it as fact for Kubernetes and `libs/security` said in its own comments that the issuer "may one day not be us" | [ADR-0023](../adr/0023-user-identities-from-a-jwks-provider.md): a verifier that holds no signing key, with the user id derived from the issuer and the subject, and the tests of `JwksUserTokensTest` and `IdentityProviderIT` |
 
-### FR-7.1, RS256 with JWKS: not implemented
+Both also turned up something that was not in the gap. Rate limiting needed a NetworkPolicy peer
+without which the limiter would have failed open on every request in the cluster, which the chart
+renders and installs without complaint. The identity provider work found `DemoLogins` wired as a
+bean in every profile, including the one with no login, where it was asking for a signing key no
+deployment should hold: invisible until there was a deployment without one.
 
-| | |
-|---|---|
-| **Claimed in** | [section 13](../../README.md#13-security) ("JWT, HS256 locally, RS256 with a JWKS endpoint on Kubernetes"), [section 22](../../README.md#22-configuration) (the `k8s` profile "brings its own identity provider") |
-| **What exists** | The HS256 path, built, configured and tested, including the separate-secret and audience arguments of `FR-7.2`. The `k8s` profile does switch the demo login off, which is implemented and tested |
-| **What does not** | Any resource-server or JWKS configuration, and any `k8s` profile document in the repository. `libs/security` says in its own comments that the issuer "may one day not be us", which is the honest version |
-| **Consequence** | A deployment on Kubernetes runs the `local` profile today, which [section 22](../../README.md#22-configuration) states and explains. The identity provider of a deployment facing real users has to be built, not only configured |
-| **To close it** | Build the resource-server path, or state in [section 13](../../README.md#13-security) that RS256 is future work |
+**What stays open is not a requirement.** The cluster-sized benchmark run of
+[chapter 7](07-constraints.md) is owed to hardware rather than to work, and the
+[future work](../../README.md#26-roadmap) of the roadmap is out of scope by decision.

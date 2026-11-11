@@ -29,7 +29,29 @@ global:
   # demo login of section 12.1 is how a browser gets a token and the `k8s` profile is the one
   # that switches it off: a cluster nobody can log in to is not a demo. A deployment that
   # faces anything but a laptop sets `k8s` and brings its own identity provider.
+  #
+  # Setting `k8s` without configuring that provider is a gateway that refuses to start, by
+  # design: the demo login is gone in that profile, so a gateway with nothing to validate
+  # against would answer 401 to every request while its pods reported themselves ready
+  # (IdentityProviderRequirement). The three values below are what it asks for.
   profile: local
+
+  # The identity provider of a `k8s` deployment (README section 13). Empty here because none
+  # of these three can have a default: they are facts about somebody else's provider, and a
+  # default for any of them would be a deployment accepting more than it meant to. The
+  # audience in particular, since a provider signs tokens for every application it serves out
+  # of one key set, so without it the signature says only that the provider signed something.
+  #
+  # Ignored by the `local` profile, which mints its own HS256 tokens through the demo login.
+  auth:
+    jwks:
+      # Where the provider publishes its RS256 keys.
+      uri: ""
+      # The iss claim this deployment accepts, and nothing else.
+      issuer: ""
+      # The aud claim this deployment is, which is the application id the provider knows
+      # SeatRush by.
+      audience: ""
 
   # Where spans go (README section 14.2). Empty turns the export off altogether, which is the
   # right answer for a cluster with nothing collecting them, and it is a switch rather than an

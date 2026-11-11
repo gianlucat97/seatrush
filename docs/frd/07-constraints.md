@@ -95,9 +95,12 @@ Stated so that nobody reads a silence as a requirement.
   ([section 6.7](../../README.md#67-seat-map-ui-frontendseat-map-ui)), which is a design decision
   and not a conformance claim.
 - **Localisation.** Money carries a currency; nothing else is localised.
-- **The unimplemented requirement** of
-  [chapter 6, open gaps](06-traceability.md#64-open-gaps) has no performance target either, because
-  a target for something that does not exist would be the least useful line in this document.
+- **Identity.** No target bounds how long validating a token may take, on either implementation.
+  The HS256 path is arithmetic inside the gateway process; the RS256 path adds a cached key set,
+  fetched once and refreshed on a key it does not know
+  ([ADR-0023](../adr/0023-user-identities-from-a-jwks-provider.md)), so the cost of a request is
+  the same arithmetic and the cost of a key rotation is one fetch. Neither has a figure behind it,
+  for the same reason as the rest of this chapter.
 - **The rate limits of `FR-7.4`** have numbers but no measured figure. The defaults are chosen
   against the shape of the sale in [section 18.1](../../README.md#181-scenario) rather than against
   an observed rate, because the only published run is the laptop-sized one of 7.2 and it never

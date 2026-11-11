@@ -3,7 +3,7 @@ package com.seatrush.gateway.adapters.in.web;
 import com.seatrush.common.error.ErrorCode;
 import com.seatrush.security.tokens.TokenException;
 import com.seatrush.security.tokens.UserToken;
-import com.seatrush.security.tokens.UserTokenSigner;
+import com.seatrush.security.tokens.UserTokens;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.Ordered;
@@ -31,6 +31,12 @@ import reactor.core.publisher.Mono;
  *
  * <p>The login endpoint is the one path with no token, which is what a login is for. Actuator is
  * the other, because a readiness probe cannot log in and the endpoint says nothing about anybody.
+ *
+ * <p>It depends on {@link UserTokens} and not on the class that mints one, which is what lets the
+ * same filter serve both deployments of README section 13: HS256 tokens this system issued on a
+ * laptop, and RS256 tokens from an identity provider in a cluster. The narrower dependency is also
+ * the safer one. A gateway configured to trust somebody else's provider holds no signing key at
+ * all, so the one process in this system whose job is to validate identities cannot issue one.
  */
 @Component
 public class UserAuthenticationFilter implements WebFilter, Ordered {
@@ -48,10 +54,10 @@ public class UserAuthenticationFilter implements WebFilter, Ordered {
 
   private static final Logger log = LoggerFactory.getLogger(UserAuthenticationFilter.class);
 
-  private final UserTokenSigner users;
+  private final UserTokens users;
   private final ProblemResponses problems;
 
-  public UserAuthenticationFilter(UserTokenSigner users, ProblemResponses problems) {
+  public UserAuthenticationFilter(UserTokens users, ProblemResponses problems) {
     this.users = users;
     this.problems = problems;
   }

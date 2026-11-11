@@ -991,27 +991,58 @@ identity header from the validated token. Any identity header supplied by a clie
 first, on every request, including the ones that need no token, because that header is what every
 service behind the gateway trusts completely.
 
+Two implementations behind one interface, and which one a deployment uses is decided by whether an
+identity provider is configured rather than by a profile name:
+
+| | What signs the token | Who mints it | What the gateway holds |
+|---|---|---|---|
+| A laptop, a demo, a benchmark | HS256 | the demo login of `FR-1.2`'s sibling, [README section 12.1](../../README.md#121-auth-demo) | the signing secret, so it both mints and reads |
+| A deployment facing real users | RS256, against the provider's published keys | an identity provider that is not this system | **nothing that could mint an identity** |
+
+The second row is the requirement, not a detail. The gateway is the one process whose job is to
+validate identities, and a validator holding a signing key is a validator that can forge what it
+validates. So the interface it depends on can only read, and a deployment that trusts a provider
+has no signer in the process at all.
+
 **Alternative flows**:
 
 - A missing or invalid token is `401 UNAUTHENTICATED`. Which check failed stays in the log: only an
   attacker learns anything from being told.
 - The demo login and the endpoints a health probe calls are the only exceptions, and the demo login
-  exists only in the `local` and `bench` profiles.
+  exists only in the `local` and `bench` profiles. In a deployment with an identity provider it is
+  absent, including the service behind it, so there is nothing that could issue a token.
+- A token the provider signed **for another application of its own** is refused. This is the
+  refusal a signature check alone cannot make, which is why the audience is demanded and has no
+  default.
+- A token arriving as any algorithm other than the configured one is refused before a key is
+  selected. The algorithm is compared to a constant and never read out of the token.
+- A provider that cannot be reached refuses every request. A gateway that accepted an identity
+  because it could not check the signature would be no gateway at all, and this is deliberately the
+  opposite of `FR-7.4`, where the store being away lets requests through: a limit protects the
+  system from a caller, a signature check stands between a caller and somebody else's order.
+- A token naming a key the provider does not publish triggers at most one key-set refresh, and then
+  refusals. Without that limit, a forged token would be a way to make the gateway flood its own
+  identity provider.
+- A deployment in the provider profile with no provider configured **refuses to start** and says
+  which three values to set, rather than starting and answering `401` to everything while reporting
+  itself ready.
 
 **Acceptance criteria**:
 
 1. A request carrying no token is refused.
-2. A token the deployment did not sign is refused.
-3. An expired token is refused, with no tolerance for clock skew.
-4. The identity header is written from the token and the one the client sent is dropped.
-
-> **Partially implemented.** The HS256 path is built and tested. The RS256 path with a JWKS
-> endpoint, which [README section 13](../../README.md#13-security) states for Kubernetes, is not:
-> there is no resource-server configuration and no `k8s` profile document in the repository, and
-> the code that would use it says in its own comments that the issuer "may one day not be us". What
-> the `k8s` profile does do today is switch the demo login off, which is implemented and tested.
-> A deployment facing real users therefore needs this built, not only configured. See
-> [chapter 6, open gaps](06-traceability.md#64-open-gaps).
+2. A token the deployment did not sign, or whose signing key the provider does not publish, is
+   refused.
+3. An expired token is refused, with no tolerance for clock skew, on either implementation.
+4. A token that is not valid yet is refused, and accepted once that instant has passed.
+5. The identity header is written from the token and the one the client sent is dropped.
+6. A token for another issuer, for another audience, or with no subject at all is refused.
+7. The identity handed downstream is a UUID whatever the provider's subject was, and the same
+   person is always the same UUID.
+8. Two providers cannot produce the same identity from the same subject.
+9. The role claim still decides the admin endpoints, read out of whichever token arrived.
+10. A deployment trusting a provider holds no object that can mint a user token.
+11. The admission of `FR-7.2` is unaffected: it is minted inside this system and checked the same
+    way regardless of where the user token came from.
 
 ### FR-7.2 Require an admission for purchase commands only
 
