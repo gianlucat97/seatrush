@@ -816,7 +816,7 @@ All endpoints are served through the gateway under `/api`. Errors follow **RFC 9
 
 ## 13. Security
 
-- **User authentication**: JWT (HS256 locally, RS256 with a JWKS endpoint on Kubernetes), validated at the gateway. `userId` is propagated to services in `X-User-Id`, set only by the gateway; services are reachable only from inside the cluster.
+- **User authentication**: JWT, validated at the gateway, which propagates `userId` to services in `X-User-Id`; that header is set only by the gateway and services are reachable only from inside the cluster. Two implementations behind one interface, chosen by whether `seatrush.auth.jwks.uri` is set (ADR-0023). **HS256** is the demo login of [§12.1](#121-auth-demo): this system mints the token and reads it back, which is what makes a browser demo and a repeatable benchmark possible. **RS256 against a provider's JWKS endpoint** is a deployment facing real users: nothing here mints an identity, the gateway holds no signing key at all, and the algorithm is pinned to a constant rather than read out of the token. The issuer and the audience are demanded and have no defaults, the audience because a provider signs tokens for every application it serves out of one key set. The user id is **derived** from the issuer and the subject rather than parsed out of it, because `X-User-Id` is a UUID that every row downstream is keyed on and no provider promises one; the same person at the same provider is therefore always the same buyer. A provider that cannot be reached refuses every request, which is the opposite of the rate limiter above and deliberately so: a limit protects the system from a caller, a signature check is what stands between a caller and somebody else's order.
 - **Authorization**: users can only read and act on their own holds and orders; admin endpoints require the `ADMIN` role claim.
 - **Admission tokens**: separate signing key, bound to `userId` + `eventId`, short TTL (default 10 minutes). Required for purchase commands only.
 - **Token verification** (`libs/security`): both tokens are JWTs signed with HS256 by two different secrets, because the gateway mints the first and queue-service the second. On top of the separate secrets each carries an `aud` claim (`seatrush:user`, `seatrush:admission`) that is demanded back, so one secret configured in both places still cannot turn an admission into an identity. The signing algorithm is compared to a constant rather than read out of the token, and expiry is checked against the injected clock with no tolerance for skew: the admission TTL also scores the slot in `active:{evt:<id>}`, and a token outliving its slot would be a buyer nobody is counting.
@@ -1375,7 +1375,13 @@ Main properties (all overridable via environment variables):
 | `seatrush.gateway.queue` | gateway | `http://localhost:8084` | Where queue-service answers |
 | `seatrush.gateway.realtime` | gateway | `http://localhost:8085` | Where realtime-service answers: the seat map stream, and nothing else |
 | `seatrush.auth.secret` | gateway | none | Base64 HS256 secret (>= 32 bytes) user JWTs are signed with; a throwaway one is generated when unset |
-| `seatrush.auth.token-ttl` | gateway | `1h` | User JWT lifetime |
+| `seatrush.auth.token-ttl` | gateway | `1h` | Lifetime of a user JWT this system mints. Ignored when an identity provider is configured, since a token then lasts as long as that provider said |
+| `seatrush.auth.jwks.uri` | gateway | none | Where an identity provider publishes its RS256 keys. Setting it is what moves the gateway from minting identities to only reading them, and what removes the signing key from the process (ADR-0023). Blank counts as unset |
+| `seatrush.auth.jwks.issuer` | gateway | none | The `iss` claim this deployment accepts, and nothing else. Demanded when a uri is set |
+| `seatrush.auth.jwks.audience` | gateway | none | The `aud` claim this deployment is, which is the application id the provider knows SeatRush by. Demanded when a uri is set, because a provider signs tokens for every application it serves out of one key set |
+| `seatrush.auth.jwks.username-claim` | gateway | `preferred_username` | Which claim carries a display name. The subject is used when it is absent |
+| `seatrush.auth.jwks.roles-claim` | gateway | `roles` | Which claim carries role names, as a list or as one space-delimited string |
+| `seatrush.auth.jwks.cache-ttl` | gateway | `15m` | How long a fetched key set is used before it is fetched again. A token naming a key the cache does not hold triggers a refresh regardless, which is what makes a key rotation invisible rather than an outage |
 | `seatrush.checkout.timeout` | order | `2m` | SAGA deadline before the pivot |
 | `seatrush.checkout.capture-max-retries` | order | `10` | Capture retries after the pivot |
 | `seatrush.checkout.capture-backoff` | order | `1s` | Pause before the first capture retry |
@@ -1421,7 +1427,7 @@ Main properties (all overridable via environment variables):
 | `seatrush.ratelimit.<scope>.ip.per-second` | gateway | `200` / `400` / `100` | Tokens put back each second for one address |
 | `SEATRUSH_VERSION` | compose | `dev` | The tag the local images are built and run as |
 
-Spring profiles: `local` (Compose, demo login enabled), `bench` (demo login enabled, verbose metrics), `k8s` (RS256 JWKS, demo login disabled). The cluster of [§24](#24-deployment-on-kubernetes) runs `local` by default, because the demo login of [§12.1](#121-auth-demo) is how a browser gets a token and a cluster nobody can log in to is not a demo; `k8s` is what a deployment facing anything but a laptop sets, and it brings its own identity provider.
+Spring profiles: `local` (Compose, demo login enabled), `bench` (demo login enabled, verbose metrics), `k8s` (RS256 JWKS, demo login disabled). The cluster of [§24](#24-deployment-on-kubernetes) runs `local` by default, because the demo login of [§12.1](#121-auth-demo) is how a browser gets a token and a cluster nobody can log in to is not a demo; `k8s` is what a deployment facing anything but a laptop sets, and it brings its own identity provider. **The `k8s` profile now demands one rather than assuming it**: a gateway started in it with no `seatrush.auth.jwks.uri` refuses to start and prints the three variables to set, because the alternative is a fleet of pods that are ready and answer `401` to everything (ADR-0023).
 
 On Kubernetes every one of these is a value of the Helm chart rather than a line of `.env`: the shared ones are in `deploy/helm/seatrush/values.yaml` and a service's own are in its subchart's, next to the service they configure. What a subchart does not set keeps the default of the service's `application.yml`, so a value is in one place and not two.
 
@@ -2054,6 +2060,7 @@ The table is the index and nothing keeps an index honest by itself, so `scripts/
 | 0020 | [Readiness on this pod's own machinery, never on a shared store](docs/adr/0020-readiness-on-this-pods-own-machinery.md) |
 | 0021 | [The invariant checker reads the stores directly and spells their keys and columns itself](docs/adr/0021-invariant-checker-reads-the-stores-directly.md) |
 | 0022 | [Token buckets in Redis at the edge, failing open when Redis is away](docs/adr/0022-token-buckets-in-redis-at-the-edge.md) |
+| 0023 | [User identities from a JWKS provider, with the user id derived rather than read](docs/adr/0023-user-identities-from-a-jwks-provider.md) |
 
 ## 26. Roadmap
 
@@ -2072,7 +2079,7 @@ The table is the index and nothing keeps an index honest by itself, so `scripts/
 | | *Arrived in parts. The ADRs of [§25](#25-architecture-decision-records), the message schemas of [§17.3](#173-the-message-schemas) and the API documents of [§17.4](#174-the-api-specifications) came first. Then the review of this document, which is `scripts/check-readme.py` and the drift it found: five cross references that went somewhere other than where they said, a tree drawing two files that are not in the repository, and three tools listed in [§19](#19-tech-stack) that this project has never used. Then the recording at the top of this file, which is `make demo-gif` and which found that the client could not call its own API at all.* | |
 
 | **M9 - The gaps the specification found** | Rate limiting, the RS256 JWKS path | Each requirement of [`docs/frd/`](docs/frd/README.md) either implemented and traced to a test, or moved out of scope |
-| | *The functional specification of [`docs/frd/`](docs/frd/README.md) was written after M8 and its traceability matrix found two requirements this document stated as present and the repository did not implement. Rate limiting is the first of them and is done: the token buckets of [§13](#13-security) and ADR-0022, with sixteen tests against a real store. The RS256 JWKS path of [§13](#13-security) is the one still owed, and it is written up in [`docs/frd/06-traceability.md`](docs/frd/06-traceability.md) where the matrix found it.* | |
+| | *The functional specification of [`docs/frd/`](docs/frd/README.md) was written after M8, and its traceability matrix found two requirements this document stated as present and the repository did not implement. Both are now built. Rate limiting is the token buckets of [§13](#13-security) and ADR-0022, with sixteen tests against a real store; the RS256 JWKS path is ADR-0023, with a verifier that holds no signing key and thirty-nine tests against a real key set on a real port. What the matrix was for is this: neither gap was visible from the code, and both were visible the moment every requirement had to name the test that proves it.* | |
 
 **Future work**: Avro + Schema Registry, multi-region active-passive, waitlist for sold-out events, bot-detection signals, CDC-based outbox relay (Debezium) as an alternative implementation, per-section Redis sharding.
 

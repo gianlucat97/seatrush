@@ -8,6 +8,7 @@ import com.seatrush.security.tokens.TokenException;
 import com.seatrush.security.tokens.TokenSecrets;
 import com.seatrush.security.tokens.UserToken;
 import com.seatrush.security.tokens.UserTokenSigner;
+import com.seatrush.security.tokens.UserTokens;
 import com.seatrush.testsupport.time.MutableClock;
 import java.time.Clock;
 import java.time.Duration;
@@ -49,6 +50,81 @@ class TokenConfigurationTest {
               assertThat(context).hasSingleBean(UserTokenSigner.class);
               assertThat(context).doesNotHaveBean(AdmissionTokenSigner.class);
             });
+  }
+
+  /**
+   * The two halves of README section 13, and never both at once.
+   *
+   * <p>The asymmetry is the security property. A deployment that trusts an identity provider gets a
+   * {@link UserTokens} that can only read, and no {@link UserTokenSigner} at all, so there is no
+   * signing key in the process that validates identities and the demo login fails to wire rather
+   * than quietly issuing tokens nobody downstream would accept.
+   */
+  @Test
+  void wiresTheSignerOnALaptopAndOnlyAReaderWithAnIdentityProvider() {
+    runner
+        .withUserConfiguration(UserTokenConfiguration.class)
+        .run(
+            context -> {
+              assertThat(context).hasSingleBean(UserTokens.class);
+              assertThat(context).hasSingleBean(UserTokenSigner.class);
+            });
+
+    runner
+        .withUserConfiguration(UserTokenConfiguration.class)
+        .withPropertyValues(
+            "seatrush.auth.jwks.uri=https://login.example.test/.well-known/jwks.json",
+            "seatrush.auth.jwks.issuer=https://login.example.test/",
+            "seatrush.auth.jwks.audience=seatrush")
+        .run(
+            context -> {
+              assertThat(context).hasSingleBean(UserTokens.class);
+              assertThat(context).doesNotHaveBean(UserTokenSigner.class);
+            });
+  }
+
+  /**
+   * An empty value is not a configured provider, which is the case a deployment actually produces.
+   *
+   * <p>The Helm chart of README section 24 renders every value of its env map, so a release on the
+   * {@code local} profile passes {@code SEATRUSH_AUTH_JWKS_URI=""}. Read as a provider, that would
+   * be a verifier pointed at nothing and a cluster that fails to start having asked for none.
+   */
+  @Test
+  void treatsAnEmptyJwksEndpointAsNoIdentityProvider() {
+    runner
+        .withUserConfiguration(UserTokenConfiguration.class)
+        .withPropertyValues(
+            "seatrush.auth.jwks.uri=", "seatrush.auth.jwks.issuer=", "seatrush.auth.jwks.audience=")
+        .run(
+            context -> {
+              assertThat(context).hasNotFailed();
+              assertThat(context).hasSingleBean(UserTokenSigner.class);
+            });
+  }
+
+  /**
+   * A half-configured provider fails at startup rather than at the first request.
+   *
+   * <p>Both of these are facts a signature check cannot supply. Without the issuer, a token from
+   * anywhere is accepted; without the audience, a token the right provider minted for a different
+   * application of its own is accepted.
+   */
+  @Test
+  void refusesToStartWithAJwksEndpointAndNoIssuerOrAudience() {
+    runner
+        .withUserConfiguration(UserTokenConfiguration.class)
+        .withPropertyValues(
+            "seatrush.auth.jwks.uri=https://login.example.test/.well-known/jwks.json",
+            "seatrush.auth.jwks.audience=seatrush")
+        .run(context -> assertThat(context).hasFailed());
+
+    runner
+        .withUserConfiguration(UserTokenConfiguration.class)
+        .withPropertyValues(
+            "seatrush.auth.jwks.uri=https://login.example.test/.well-known/jwks.json",
+            "seatrush.auth.jwks.issuer=https://login.example.test/")
+        .run(context -> assertThat(context).hasFailed());
   }
 
   @Test
