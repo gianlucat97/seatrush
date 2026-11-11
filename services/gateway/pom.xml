@@ -40,6 +40,16 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-validation</artifactId>
     </dependency>
+
+    <!-- The token buckets of README section 13, which are the one piece of state this service
+         has and deliberately does not keep: a limit of ten per pod across six pods is a limit
+         of sixty, and the autoscaler of section 24.3 changes that number under load. Reactive,
+         because a blocking round trip here would be on the event loop holding every SSE
+         connection of every waiting client. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-redis-reactive</artifactId>
+    </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-actuator</artifactId>
@@ -90,7 +100,9 @@
       <artifactId>spring-boot-webtestclient</artifactId>
       <scope>test</scope>
     </dependency>
-    <!-- The movable clock, so an expired token is a test and not a wait. -->
+    <!-- The movable clock, so an expired token is a test and not a wait, and the Redis
+         container the token buckets are asserted against: a limit is arithmetic over a clock
+         and a store, and a fake of either would be a test of the fake. -->
     <dependency>
       <groupId>com.seatrush</groupId>
       <artifactId>seatrush-test-support</artifactId>

@@ -69,6 +69,11 @@ class GatewayEdgeIT {
 
   @DynamicPropertySource
   static void downstream(DynamicPropertyRegistry registry) {
+    // The limits of README section 13 are off here, and that is a separation of concerns rather
+    // than a convenience. This class asks what identity a request arrived with and which service
+    // answered it, and both of those questions are about requests repeated a dozen times from one
+    // caller. RateLimitIT is where the buckets are asserted, against the Redis they need.
+    registry.add("seatrush.ratelimit.enabled", () -> false);
     registry.add("seatrush.gateway.inventory", INVENTORY::url);
     registry.add("seatrush.gateway.queue", QUEUE::url);
     registry.add("seatrush.gateway.order", ORDERS::url);

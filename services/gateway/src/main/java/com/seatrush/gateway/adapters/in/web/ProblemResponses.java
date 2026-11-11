@@ -5,6 +5,7 @@ import com.seatrush.common.error.ProblemDetails;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.springframework.core.io.buffer.DataBuffer;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
@@ -37,10 +38,29 @@ public class ProblemResponses {
 
   /** Refuses the request with the status and title the code carries. */
   public Mono<Void> write(ServerWebExchange exchange, ErrorCode code, String detail) {
+    return write(exchange, code, detail, null);
+  }
+
+  /**
+   * The same, with {@code Retry-After} on it.
+   *
+   * <p>For the one refusal that is a measured wait rather than a verdict about the request. {@code
+   * 429 RATE_LIMITED} tells a client it asked too often, and a client told that and nothing else
+   * retries on a schedule of its own, which under load is the schedule that caused the refusal. The
+   * header is the whole difference between a limit that sheds load and a limit that adds a retry
+   * storm to it, which is why README section 12.6 lists it beside the code.
+   *
+   * @param retryAfter how long to wait, in whole seconds; no header is set when null
+   */
+  public Mono<Void> write(
+      ServerWebExchange exchange, ErrorCode code, String detail, Long retryAfter) {
     ProblemDetail problem = ProblemDetails.of(code, detail);
     ServerHttpResponse response = exchange.getResponse();
     response.setStatusCode(HttpStatus.valueOf(problem.getStatus()));
     response.getHeaders().setContentType(MediaType.APPLICATION_PROBLEM_JSON);
+    if (retryAfter != null) {
+      response.getHeaders().set(HttpHeaders.RETRY_AFTER, String.valueOf(retryAfter));
+    }
 
     DataBuffer body = response.bufferFactory().wrap(JSON.writeValueAsBytes(flatten(problem)));
     return response.writeWith(Mono.just(body));

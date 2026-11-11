@@ -169,7 +169,7 @@ Single entry point for clients. Built on Spring Cloud Gateway (reactive), so it 
 
 - Validates user JWTs on every request, except `POST /api/auth/demo-login` and the actuator endpoints a probe calls.
 - Validates **admission tokens** on purchase commands only (`POST /holds`, `DELETE /holds/{id}`, `POST /orders`). Reads (`GET /orders/{id}`) need only the user JWT, so a user can follow an order even after the admission token has expired.
-- Token-bucket **rate limiting per user and per IP**, backed by Redis.
+- Token-bucket **rate limiting per user and per IP**, backed by Redis (ADR-0022). Three scopes, because the three requests cost different amounts: joining a waiting room, holding seats, creating an order. Reads are not limited, since a read takes nothing from a sale and polling an order is the one thing a buyer past the pivot is told to do; releasing a hold is not limited either, because it gives seats back and refusing it would mean keeping seats off the market in order to protect it. Two buckets are spent per request, the caller's own and the one for the address they came from, and the stricter verdict wins with the longer of the two waits reported in `Retry-After`. In Redis and in Lua rather than in this process, for the reason the holds are: four gateway pods each counting to twenty is a limit of eighty, and the autoscaler of [§24.3](#243-autoscaling) changes that number under exactly the load it exists for. Checked *after* the admission above, so a purchase command with no turn is refused by arithmetic here and never spends a round trip.
 - Removes any client-supplied `X-User-Id` header and sets it from the validated JWT. The removal happens on every request, including the ones that need no token, because that header is what every service behind the gateway trusts completely.
 - Presented in `X-Admission-Token`, an admission is checked three ways before a purchase command is forwarded: that this deployment signed it and it has not lapsed, that its subject is the caller rather than somebody who passed it on, and, where the path names an event, that it is for that sale. `DELETE /holds/{id}` and `POST /orders` name a hold and an order instead, whose event is known to the services that own them, so ownership is checked there rather than read here to repeat a check somebody else makes. The header is dropped before the request is forwarded, since the only thing that validates an admission is the only thing that needs to see one.
 - Refuses with the Problem Details of [§12.6](#126-error-codes): `401 UNAUTHENTICATED` for a missing or invalid token, `403 FORBIDDEN` for an admin endpoint without the role, `403 ADMISSION_REQUIRED` for a purchase command without a turn. Which check failed stays in the log, because only an attacker learns anything from being told.
@@ -820,7 +820,7 @@ All endpoints are served through the gateway under `/api`. Errors follow **RFC 9
 - **Authorization**: users can only read and act on their own holds and orders; admin endpoints require the `ADMIN` role claim.
 - **Admission tokens**: separate signing key, bound to `userId` + `eventId`, short TTL (default 10 minutes). Required for purchase commands only.
 - **Token verification** (`libs/security`): both tokens are JWTs signed with HS256 by two different secrets, because the gateway mints the first and queue-service the second. On top of the separate secrets each carries an `aud` claim (`seatrush:user`, `seatrush:admission`) that is demanded back, so one secret configured in both places still cannot turn an admission into an identity. The signing algorithm is compared to a constant rather than read out of the token, and expiry is checked against the injected clock with no tolerance for skew: the admission TTL also scores the slot in `active:{evt:<id>}`, and a token outliving its slot would be a buyer nobody is counting.
-- **Rate limiting**: token bucket per user and per IP on queue join, holds and orders.
+- **Rate limiting**: token bucket per user and per IP on queue join, holds and orders, with the two per-scope numbers of [§22](#22-configuration). The per-address pair is looser by two orders of magnitude on purpose: one address can be an office or a mobile carrier, so that bucket is there to stop a script rather than to shape a buyer, and the per-user one is the strict half because it is keyed on an id out of a signed token. **A Redis that cannot be reached lets the request through and counts it** in `seatrush_ratelimit_degraded_total`, which is a deliberate decision rather than an oversight: all three limited requests need Redis further down anyway, so refusing them here would convert a store outage into a second one (ADR-0022).
 - **Anti-hoarding**: one active hold per user per event, max seats per hold.
 - **Signed tickets**: ticket payload (`ticketId, eventId, seatId, issuedAt`) signed with Ed25519 by order-service, verifiable offline at the venue entrance.
 - **Internal endpoints** reachable only inside the cluster, as a rule the API server enforces and not only as a shape of the deployment ([§24.7](#247-networkpolicies)).
@@ -860,6 +860,8 @@ Every meter carries a **`service` label**, set from `spring.application.name` by
 | `seatrush_saga_stuck{reason}` | gauge | Checkouts the scheduler cannot move on its own: past their deadline (`overdue`) or out of capture retries (`capture_abandoned`) |
 | `seatrush_payment_operations_total{operation,result}` | counter | Authorizations, captures and voids as the provider answered them |
 | `seatrush_payment_replays_total{operation}` | counter | Payment commands answered from the stored result of a previous one |
+| `seatrush_ratelimit_refusals_total{scope,subject}` | counter | Requests refused by a token bucket, by what was being protected (`queue-join`, `hold`, `order`) and whether the empty bucket was one buyer's or one address's (`user`, `address`) |
+| `seatrush_ratelimit_degraded_total{scope,subject}` | counter | Rate limit checks that could not be made because Redis did not answer, and whose requests were therefore let through (ADR-0022) |
 | `seatrush_outbox_lag_seconds{store}` | gauge | Age of the oldest unpublished outbox entry (`postgres`, `redis`) |
 | `seatrush_outbox_relayed_total` | counter | Outbox entries published |
 | `seatrush_messages_duplicates_total{type}` | counter | Redelivered messages skipped by `processed_message` |
@@ -1412,7 +1414,11 @@ Main properties (all overridable via environment variables):
 | `seatrush.payment.decline-rate` | payment | `0.05` | Simulated decline rate |
 | `seatrush.payment.latency-p50` | payment | `300ms` | Simulated latency median |
 | `seatrush.payment.latency-p99` | payment | `1500ms` | Simulated latency tail |
-| `seatrush.ratelimit.*` | gateway | see config | Token bucket per scope |
+| `seatrush.ratelimit.enabled` | gateway | `true` | Whether the token buckets of [§13](#13-security) are enforced. A deployment with no Redis sets it false rather than letting every request fail open and say so |
+| `seatrush.ratelimit.<scope>.user.burst` | gateway | `10` join, `20` hold, `5` order | How much one buyer may do at once, per scope: `queue-join`, `hold`, `order` |
+| `seatrush.ratelimit.<scope>.user.per-second` | gateway | `2` / `5` / `1` | Tokens put back each second for one buyer, which is the sustained rate |
+| `seatrush.ratelimit.<scope>.ip.burst` | gateway | `500` / `1000` / `300` | The same for everybody behind one address. Looser by two orders of magnitude, because one address can be an office or a mobile carrier and this bucket is there to stop a script rather than to shape a buyer |
+| `seatrush.ratelimit.<scope>.ip.per-second` | gateway | `200` / `400` / `100` | Tokens put back each second for one address |
 | `SEATRUSH_VERSION` | compose | `dev` | The tag the local images are built and run as |
 
 Spring profiles: `local` (Compose, demo login enabled), `bench` (demo login enabled, verbose metrics), `k8s` (RS256 JWKS, demo login disabled). The cluster of [§24](#24-deployment-on-kubernetes) runs `local` by default, because the demo login of [§12.1](#121-auth-demo) is how a browser gets a token and a cluster nobody can log in to is not a demo; `k8s` is what a deployment facing anything but a laptop sets, and it brings its own identity provider.
@@ -1981,7 +1987,7 @@ would secure the six services and leave the seventh open by accident.
 | payment-service | nothing at all |
 | every service | the `seatrush-observability` namespace, for the scrape of [§24.4](#244-observability-in-the-cluster) |
 | Postgres | the three services that own a database ([§11](#11-data-storage)) |
-| Redis | inventory-service, queue-service |
+| Redis | gateway (the token buckets of [§13](#13-security)), inventory-service, queue-service |
 | the broker | all five services, the topics Job, itself, and two namespaces |
 
 Four of those rows are worth a sentence. **payment-service is reachable by nothing**, which is a
@@ -2047,6 +2053,7 @@ The table is the index and nothing keeps an index honest by itself, so `scripts/
 | 0019 | [The observability stack as an add-on of the cluster, not a subchart of the release](docs/adr/0019-observability-as-a-cluster-add-on.md) |
 | 0020 | [Readiness on this pod's own machinery, never on a shared store](docs/adr/0020-readiness-on-this-pods-own-machinery.md) |
 | 0021 | [The invariant checker reads the stores directly and spells their keys and columns itself](docs/adr/0021-invariant-checker-reads-the-stores-directly.md) |
+| 0022 | [Token buckets in Redis at the edge, failing open when Redis is away](docs/adr/0022-token-buckets-in-redis-at-the-edge.md) |
 
 ## 26. Roadmap
 
@@ -2063,6 +2070,9 @@ The table is the index and nothing keeps an index honest by itself, so `scripts/
 | | *Arrived in parts. The invariant checker of [§17.1](#171-the-invariant-checker) came first, because it is what every other part of this milestone is judged by: a load test with nothing to check it against produces a throughput figure and no verdict. Then the Gatling simulation of [§18.1.1](#1811-how-it-is-run), which is `make load-small` and `make load-full`. Then the chaos experiments of [§17.2](#172-the-chaos-experiments), which is `make chaos`. Then `make publish-run` and the run of [§18.2](#182-environment) and [§18.3](#183-results), which is a laptop-sized one. A run from a cluster was then tried four times and is written up in [§18.2](#182-environment) where it belongs: the machine that hosts `make k8s-up` cannot also be the injector, and that run is the one thing in this table still owed. What it would have answered is listed in [§18.4](#184-what-the-hardware-did-not-allow), which is the milestone's own account of what it could not test.* | |
 | **M8 - Polish** | ADRs complete, OpenAPI and message docs, demo GIF, final README review | - |
 | | *Arrived in parts. The ADRs of [§25](#25-architecture-decision-records), the message schemas of [§17.3](#173-the-message-schemas) and the API documents of [§17.4](#174-the-api-specifications) came first. Then the review of this document, which is `scripts/check-readme.py` and the drift it found: five cross references that went somewhere other than where they said, a tree drawing two files that are not in the repository, and three tools listed in [§19](#19-tech-stack) that this project has never used. Then the recording at the top of this file, which is `make demo-gif` and which found that the client could not call its own API at all.* | |
+
+| **M9 - The gaps the specification found** | Rate limiting, the RS256 JWKS path | Each requirement of [`docs/frd/`](docs/frd/README.md) either implemented and traced to a test, or moved out of scope |
+| | *The functional specification of [`docs/frd/`](docs/frd/README.md) was written after M8 and its traceability matrix found two requirements this document stated as present and the repository did not implement. Rate limiting is the first of them and is done: the token buckets of [§13](#13-security) and ADR-0022, with sixteen tests against a real store. The RS256 JWKS path of [§13](#13-security) is the one still owed, and it is written up in [`docs/frd/06-traceability.md`](docs/frd/06-traceability.md) where the matrix found it.* | |
 
 **Future work**: Avro + Schema Registry, multi-region active-passive, waitlist for sold-out events, bot-detection signals, CDC-based outbox relay (Debezium) as an alternative implementation, per-section Redis sharding.
 
