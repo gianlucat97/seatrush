@@ -104,6 +104,15 @@ jobs:
       - name: Validate the README
         run: python scripts/check-readme.py
 
+      # The functional specification of docs/frd/, which has one failure mode the README does not:
+      # it numbers forty-seven requirements and then points every one of them at a README section,
+      # an ADR and a test method. Every cell of that matrix is a fact about a file somebody else
+      # edits. A test renamed in Java leaves a row naming a method nobody can find, a requirement
+      # renamed in the catalogue and not in the matrix still renders, and a requirement cited in a
+      # journey and never defined reads exactly like one that was.
+      - name: Validate the functional specification
+        run: python scripts/check-frd.py
+
       # The Helm chart of README section 24, which fails in three quiet ways. A manifest
       # Kubernetes would reject is a release that half-applies, and the first half is
       # whichever objects sorted earlier; a chart that has drifted from the Compose stack

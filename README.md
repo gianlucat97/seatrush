@@ -8,7 +8,7 @@
 
 *The spectator view of [§6.7](#67-seat-map-ui-frontendseat-map-ui) during a run of the load test of [§18.1](#181-scenario): 400 buyers reaching for 150 seats, available in green, held in yellow, sold in red, and the counters at the top read off the same stream the map is. 106 seats sold in the minute this covers, and the pauses at either end are where nothing changed. Recorded by `make demo-gif`, which is [§23](#23-running-locally).*
 
-> Status: 🚧 under active development. This document is the technical specification of the system; values marked *Target* are goals, [§18.3](#183-results) is the run that reports against them, and [§18.4](#184-what-the-hardware-did-not-allow) is what that run could not reach.
+> Status: 🚧 under active development. This document is the technical specification of the system: how it is built. The **functional specification** is [`docs/frd/`](docs/frd/README.md), which numbers what the system must do, how each requirement is verified and how the system is used. Values marked *Target* here are goals, [§18.3](#183-results) is the run that reports against them, and [§18.4](#184-what-the-hardware-did-not-allow) is what that run could not reach.
 
 ---
 
@@ -975,6 +975,7 @@ There is no Alertmanager in the local stack. A firing rule is visible under **Al
 | Load | Gatling (Java DSL), `make load-small` | The scenario of [§18.1](#181-scenario), followed by the checker below ([§18.1.1](#1811-how-it-is-run)) |
 | Chaos | `make chaos` ([§17.2](#172-the-chaos-experiments)), during a load run | Six of the [§16](#16-failure-modes) rows, each with the recovery that row promises |
 | Invariants | The checker of [§17.1](#171-the-invariant-checker), over the stores of a deployment | Every invariant of [§4](#4-core-invariants) that a finished run can still be asked about |
+| Specification | `scripts/check-readme.py`, `scripts/check-frd.py` | This document and the functional specification of [`docs/frd/`](docs/frd/README.md) against the repository: anchors, paths, `make` targets, and every requirement traced to the test that proves it |
 
 Time-dependent logic (TTLs, deadlines, sweepers) uses an injected `java.time.Clock` so tests are deterministic.
 
@@ -1252,6 +1253,8 @@ seatrush/
 │   ├── grafana/dashboards/         # read by the Compose stack and by the cluster alike
 │   └── prometheus/                 # scrape config of the local stack, and the alert rules
 ├── docs/
+│   ├── frd/                         # the functional specification: requirements, journeys,
+│   │                                # operations and traceability, validated in CI
 │   ├── adr/                        # one file per row of section 25, validated in CI
 │   ├── api/                        # one OpenAPI 3.1 document per service, generated from
 │   │                               # the running service and compared against it by the build
@@ -1263,7 +1266,7 @@ seatrush/
 ├── scripts/                        # seed.sh, check.sh, load.sh, chaos.sh, publish-run.sh
 │                                   # and the readings it takes, demo-gif.sh and the two
 │                                   # halves of a recording, the two k8s scripts,
-│                                   # the four CI validators
+│                                   # the five CI validators
 ├── .github/workflows/
 │   ├── ci.yml                      # format check, the validators, build, unit + integration
 │   │                               # tests, ArchUnit, the client, and the images
