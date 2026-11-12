@@ -1,0 +1,642 @@
+/*
+ * The whole of the styling, in one file and with no framework.
+ *
+ * A demo client of four views does not need a design system, and a seat map is the only thing here
+ * with a real visual requirement: the three statuses have to be distinguishable at a glance in a
+ * grid of thousands, and distinguishable by more than hue, since a venue filling up is exactly the
+ * kind of green-to-red change that colour blindness hides. They differ in brightness as well.
+ */
+
+:root {
+  color-scheme: dark light;
+
+  --ink: #e8e9ed;
+  --ink-dim: #9aa0ad;
+  --ground: #14161c;
+  --raised: #1c1f27;
+  --line: #2b2f3a;
+  --accent: #5aa9ff;
+
+  --available: #3f8f5f;
+  --held: #d8a63c;
+  --sold: #8e2f3f;
+  --own: #5aa9ff;
+  --picked: #e8e9ed;
+
+  --radius: 8px;
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+h1 {
+  font-size: 1.4rem;
+  margin: 0 0 0.25rem;
+}
+
+a {
+  color: var(--accent);
+}
+
+code {
+  background: var(--raised);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  font-size: 0.9em;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+/* The shell */
+
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--raised);
+}
+
+.brand {
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+  color: var(--ink);
+}
+
+.who {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--ink-dim);
+}
+
+.panel {
+  padding: 1.25rem;
+  max-width: 60rem;
+}
+
+.lead {
+  color: var(--ink-dim);
+  margin: 0 0 1rem;
+}
+
+.empty {
+  color: var(--ink-dim);
+  padding: 1rem 0;
+}
+
+button,
+input[type='text'],
+input:not([type]) {
+  font: inherit;
+}
+
+button {
+  background: var(--accent);
+  color: #06121f;
+  border: 0;
+  border-radius: var(--radius);
+  padding: 0.5rem 1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.link {
+  background: none;
+  color: var(--accent);
+  padding: 0 0.25rem;
+  font-weight: 500;
+  text-decoration: underline;
+}
+
+.error {
+  background: #3a1620;
+  border: 1px solid var(--sold);
+  border-radius: var(--radius);
+  color: #ffd9e0;
+  margin: 0.75rem 1.25rem 0;
+  padding: 0.6rem 0.9rem;
+}
+
+/* Sign in */
+
+.sign-in {
+  max-width: 28rem;
+  margin: 10vh auto 0;
+}
+
+.sign-in form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.sign-in input:not([type='checkbox']) {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--ink);
+  padding: 0.55rem 0.7rem;
+}
+
+.sign-in label {
+  color: var(--ink-dim);
+}
+
+.sign-in label.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.25rem 0 0.5rem;
+}
+
+/* The catalog */
+
+.events {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.events caption {
+  text-align: left;
+  color: var(--ink-dim);
+  padding-bottom: 0.5rem;
+}
+
+.events th,
+.events td {
+  border-bottom: 1px solid var(--line);
+  padding: 0.6rem 0.5rem;
+  vertical-align: baseline;
+}
+
+.events tbody th {
+  font-weight: 600;
+}
+
+.row-links {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.status {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-dim);
+  padding: 0.1rem 0.6rem;
+  font-size: 0.85rem;
+}
+
+.status-on_sale {
+  border-color: var(--available);
+  color: #8fe0ab;
+}
+
+.status-sold_out {
+  border-color: var(--sold);
+  color: #ffb3c0;
+}
+
+/* One event */
+
+.event {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1.25rem;
+  flex: 1;
+  min-height: 0;
+}
+
+.event-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.event-links {
+  display: flex;
+  gap: 1rem;
+}
+
+.totals {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.figure {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  padding: 0.4rem 0.9rem;
+  min-width: 7rem;
+}
+
+.figure-label {
+  display: block;
+  color: var(--ink-dim);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.figure-value {
+  font-size: 1.3rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.figure.status-available {
+  border-left-color: var(--available);
+}
+
+.figure.status-held {
+  border-left-color: var(--held);
+}
+
+.figure.status-sold {
+  border-left-color: var(--sold);
+}
+
+.figure.status-version {
+  border-left-color: var(--line);
+}
+
+/* What the stream is doing */
+
+.feed {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--ink-dim);
+  margin: 0;
+}
+
+.feed-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--ink-dim);
+}
+
+.feed-live .feed-dot {
+  background: var(--available);
+}
+
+.feed-reconnecting .feed-dot {
+  background: var(--held);
+}
+
+.feed-failed .feed-dot {
+  background: var(--sold);
+}
+
+.feed-note {
+  color: var(--ink-dim);
+}
+
+/* The venue, and the waiting room beside it */
+
+.event-body {
+  display: flex;
+  gap: 0.75rem;
+  flex: 1;
+  min-height: 0;
+  align-items: stretch;
+}
+
+.event-aside {
+  flex: 0 0 20rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* One column once the venue and a panel no longer fit side by side. */
+@media (max-width: 60rem) {
+  .event-body {
+    flex-direction: column;
+  }
+
+  .event-aside {
+    flex: 0 0 auto;
+  }
+}
+
+.waiting {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-top-width: 3px;
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.waiting h2 {
+  font-size: 1.05rem;
+  margin: 0;
+}
+
+.waiting .lead {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.waiting-queued {
+  border-top-color: var(--accent);
+}
+
+.waiting-admitted {
+  border-top-color: var(--available);
+}
+
+.waiting-lapsed,
+.waiting-soldout {
+  border-top-color: var(--sold);
+}
+
+.countdown {
+  display: flex;
+  flex-direction: column;
+  margin: 0.25rem 0;
+}
+
+.countdown-value {
+  font-size: 2rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.countdown-label {
+  color: var(--ink-dim);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.error-inline {
+  color: #ffb3c0;
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+/* The purchase, under the waiting room */
+
+.checkout {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-top-width: 3px;
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.checkout h2 {
+  font-size: 1.05rem;
+  margin: 0;
+}
+
+.checkout h3 {
+  font-size: 0.95rem;
+  margin: 0.5rem 0 0;
+}
+
+.checkout .lead {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+/* The three borders say the same thing the headings do: held, final, and over. */
+.checkout-held {
+  border-top-color: var(--held);
+}
+
+.checkout-secured,
+.checkout-confirmed {
+  border-top-color: var(--available);
+}
+
+.checkout-expired,
+.checkout-undoing,
+.checkout-failed {
+  border-top-color: var(--sold);
+}
+
+.seat-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.seat-list li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  border-bottom: 1px solid var(--line);
+  padding: 0.15rem 0;
+}
+
+.seat-name {
+  font-variant-numeric: tabular-nums;
+}
+
+.seat-price {
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  margin: 0.25rem 0 0;
+}
+
+.total-label {
+  color: var(--ink-dim);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.total-value {
+  font-size: 1.2rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.tickets {
+  width: 100%;
+}
+
+.ticket {
+  margin: 0.5rem 0 0;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.6rem;
+}
+
+.ticket figcaption {
+  font-weight: 600;
+}
+
+.ticket-id {
+  color: var(--ink-dim);
+  font-weight: 400;
+  font-size: 0.8rem;
+}
+
+/*
+ * The signed payload, which is the ticket itself. Shown whole rather than elided: it is what a gate
+ * verifies, and a demo that hid it would be hiding the one artefact the signing exists to produce.
+ */
+.ticket-payload {
+  display: block;
+  margin-top: 0.35rem;
+  overflow-wrap: anywhere;
+  font-size: 0.7rem;
+  line-height: 1.35;
+  color: var(--ink-dim);
+}
+
+/* The venue */
+
+.map-frame {
+  flex: 1;
+  min-height: 24rem;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+  display: flex;
+}
+
+.seat-map {
+  width: 100%;
+  height: 100%;
+  /* The grid is drawn with a unit of one seat, so the stroke has to be in those units too. */
+  stroke-width: 0.06;
+}
+
+.seat {
+  stroke: none;
+}
+
+.seat-available {
+  fill: var(--available);
+}
+
+.seat-held {
+  fill: var(--held);
+}
+
+.seat-sold {
+  fill: var(--sold);
+}
+
+/* A seat this user holds, outlined rather than recoloured: it is still a held seat. */
+.seat-own {
+  stroke: var(--own);
+}
+
+/*
+ * A seat this user has picked and not yet held. Outlined too, and in a colour of its own, because
+ * nothing about the sale has changed: the seat is still available to everybody else, and recolouring
+ * it would be the page telling its own user the venue is fuller than it is.
+ */
+.seat-selected {
+  stroke: var(--picked);
+  stroke-width: 0.12;
+}
+
+/* A seat that can be taken invites a pointer; one that cannot is only there to be read. */
+.seat[role='checkbox'] {
+  cursor: pointer;
+}
+
+.seat[role='checkbox']:focus-visible {
+  outline: none;
+  stroke: var(--accent);
+  stroke-width: 0.16;
+}
+
+.spectator .event-header h1 {
+  font-size: 1.1rem;
+}
+
+.spectator .map-frame {
+  min-height: 60vh;
+}
+
+@media (prefers-color-scheme: light) {
+  .error-inline {
+    color: #a3303f;
+  }
+
+  :root {
+    --ink: #1b1d23;
+    --ink-dim: #5c6270;
+    --ground: #f4f5f8;
+    --raised: #ffffff;
+    --line: #dcdfe6;
+    --available: #2f7a4d;
+    --held: #b5811f;
+    --sold: #a3303f;
+    --picked: #1b1d23;
+  }
+
+  .error {
+    background: #fdeaee;
+    color: #5c1020;
+  }
+}

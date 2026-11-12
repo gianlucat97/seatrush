@@ -1,0 +1,45 @@
+# The payment provider, simulated (README section 6.5).
+
+replicaCount: 1
+port: 8083
+
+database: payment
+needs:
+  redis: false
+  kafka: true
+
+env:
+  # A twentieth of checkouts declined, which is what makes the compensations of README
+  # section 8.3 something a demo runs into rather than something only a test sees.
+  SEATRUSH_PAYMENT_DECLINE_RATE: "0.05"
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 384Mi
+  limits:
+    memory: 768Mi
+
+# Consumer group lag, the same mechanism order-service uses (README section 24.3) and the
+# clearer half of the case for it: this service does nothing but consume commands, and the
+# provider it simulates answers in the 300 ms of README section 22. So a pod's throughput is
+# bounded by a latency it does not control, which is precisely the shape CPU cannot see: a
+# pod waiting on a provider is a pod that looks idle and is not available.
+keda:
+  enabled: true
+  minReplicaCount: 1
+  maxReplicaCount: 4
+  consumerGroup: payment-service
+  # Lower than order-service's, because the work behind one of these records is longer: an
+  # authorization or a capture is a call to the provider, and fifty of them queued is already
+  # fifteen seconds of a buyer's two (README section 15).
+  lagThreshold: 25
+  topics:
+    - payment.commands
+
+# Who may reach this service (README section 24.7). Nothing, and that is the point worth
+# writing down: this service is driven entirely by `payment.commands` and answers on
+# `payment.replies`, so it has no caller at all. Its port is open to the scrape of section 24.4
+# and to nothing else, which is a sharper statement than any list could be.
+networkPolicy:
+  allowFrom: []

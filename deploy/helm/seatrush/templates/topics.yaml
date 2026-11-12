@@ -1,0 +1,119 @@
+{{- if .Values.topics.enabled }}
+{{/*
+The topics of README section 10.1, created by a Helm hook.
+
+Topics are never auto-created: the broker has auto-creation off, so a producer that mistypes
+a topic name fails loudly instead of getting a fresh single-partition topic that silently
+breaks the ordering the partition count is there to provide. Something therefore has to
+create them, and in a cluster that something cannot be the `depends_on` the Compose stack
+uses.
+
+`post-install` rather than `pre-install`, which is the one way the hooks of README section 24
+have to be read against their own name. A pre-install hook runs before the chart has created
+the broker it would have to talk to, so on a first install it would wait for a Kafka that
+does not exist yet and fail. On an upgrade the broker is already there, and then `pre-upgrade`
+is the right phase, because a topic a new release produces to has to exist before the release
+does.
+
+What that costs on a first install is the seconds between the services starting and the
+topics appearing, during which a consumer logs that its topic is unknown and asks for fresh
+metadata. Nothing produces in that window: the relays of section 9.5 poll and find nothing
+until there is a sale, and `make k8s-up` seeds one after this has run.
+
+The hook is not deleted when it succeeds, only before it is created again, so the log of the
+last run is still there to read. `kubectl logs job/<release>-topics` is the answer to a
+pipeline that is not moving.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "seatrush.release" . }}-topics
+  labels:
+    {{- include "seatrush.component.labels" (dict "context" . "name" "topics" "component" "setup") | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  # A pass that fails is a pass worth repeating: the script is idempotent, so the only thing
+  # a retry costs is the time it takes.
+  backoffLimit: 6
+  # Half an hour, because the alternative to a deadline is a hook that holds a release open
+  # for ever when the broker never comes back.
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels:
+        {{- include "seatrush.component.labels" (dict "context" . "name" "topics" "component" "setup") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      containers:
+        - name: topics
+          image: {{ .Values.global.kafka.image | quote }}
+          imagePullPolicy: {{ .Values.global.image.pullPolicy | quote }}
+          env:
+            # Where the shell scripts of the image put the JVM's log directory. It defaults
+            # to one under /opt/kafka, which this container cannot write to.
+            - name: LOG_DIR
+              value: /tmp
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+
+              bootstrap="{{ include "seatrush.kafka.bootstrapServers" . }}"
+              kafka_topics=/opt/kafka/bin/kafka-topics.sh
+
+              # The hook runs after Helm has waited for every service to be ready, so the
+              # broker is up by the time this starts. It is still waited for rather than
+              # assumed: a broker replaced by its StatefulSet a moment earlier would
+              # otherwise turn one slow metadata request into a failed release.
+              until "$kafka_topics" --bootstrap-server "$bootstrap" --list >/dev/null 2>&1; do
+                echo "waiting for the broker at $bootstrap"
+                sleep 5
+              done
+
+              create_topic() {
+                # --if-not-exists, which is what makes this safe to run on every upgrade.
+                # Nothing here ever changes a topic that exists: a partition count can only
+                # be raised, and raising it moves the key of an in-flight SAGA to another
+                # partition (README section 10.1).
+                "$kafka_topics" --bootstrap-server "$bootstrap" \
+                  --create --if-not-exists \
+                  --topic "$1" --partitions "$2" \
+                  --replication-factor {{ .Values.topics.replicationFactor }}
+                echo "topic $1 ready with $2 partitions"
+              }
+
+              {{- range .Values.topics.names }}
+              create_topic {{ . | quote }} {{ $.Values.topics.partitions }}
+              create_topic {{ printf "%s.dlq" . | quote }} {{ $.Values.topics.dlqPartitions }}
+              {{- end }}
+
+              echo "topics on $bootstrap:"
+              "$kafka_topics" --bootstrap-server "$bootstrap" --list
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            {{- toYaml .Values.global.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            # The image generates its logging configuration under here before it will run a
+            # tool, and the JVM wants somewhere for its own temporary files.
+            - name: config
+              mountPath: /mnt/shared/config
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+{{- end }}

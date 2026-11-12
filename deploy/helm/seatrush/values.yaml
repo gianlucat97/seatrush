@@ -1,0 +1,300 @@
+# The configuration of a SeatRush release (README sections 22 and 24).
+#
+# What is here is what every subchart shares and what no subchart may decide on its own: the
+# images, the infrastructure endpoints, the secrets and the three values two services have to
+# agree on. A service's own knobs live in its subchart's values.yaml, next to the service
+# they configure, so `charts/queue-service/values.yaml` is where the door of a sale is set
+# and not a block of this file forty lines from the next one.
+#
+# The defaults here run on kind, which is the cluster of `make k8s-up`. A managed cluster is
+# a values file that turns `infra` off and names its three hosts; nothing else changes, which
+# is what README section 24 means by cloud-agnostic.
+
+global:
+  image:
+    # Empty, because the images of `make k8s-images` are loaded into the nodes rather than
+    # pulled: a registry here is what a real cluster sets, together with pullSecrets.
+    registry: ""
+    repository: seatrush
+    # The tag `make k8s-images` builds, which is also the SEATRUSH_VERSION of the Compose
+    # stack. Not `latest`, so a node that already has an image of this name does not quietly
+    # run a different build of it.
+    tag: dev
+    # IfNotPresent and never Always: a tag that is only in the node's own image store, which
+    # is what `kind load` produces, cannot be pulled and Always would fail every pod.
+    pullPolicy: IfNotPresent
+    pullSecrets: []
+
+  # The profile every service starts with (README section 22). `local` on kind, because the
+  # demo login of section 12.1 is how a browser gets a token and the `k8s` profile is the one
+  # that switches it off: a cluster nobody can log in to is not a demo. A deployment that
+  # faces anything but a laptop sets `k8s` and brings its own identity provider.
+  #
+  # Setting `k8s` without configuring that provider is a gateway that refuses to start, by
+  # design: the demo login is gone in that profile, so a gateway with nothing to validate
+  # against would answer 401 to every request while its pods reported themselves ready
+  # (IdentityProviderRequirement). The three values below are what it asks for.
+  profile: local
+
+  # The identity provider of a `k8s` deployment (README section 13). Empty here because none
+  # of these three can have a default: they are facts about somebody else's provider, and a
+  # default for any of them would be a deployment accepting more than it meant to. The
+  # audience in particular, since a provider signs tokens for every application it serves out
+  # of one key set, so without it the signature says only that the provider signed something.
+  #
+  # Ignored by the `local` profile, which mints its own HS256 tokens through the demo login.
+  auth:
+    jwks:
+      # Where the provider publishes its RS256 keys.
+      uri: ""
+      # The iss claim this deployment accepts, and nothing else.
+      issuer: ""
+      # The aud claim this deployment is, which is the application id the provider knows
+      # SeatRush by.
+      audience: ""
+
+  # Where spans go (README section 14.2). Empty turns the export off altogether, which is the
+  # right answer for a cluster with nothing collecting them, and it is a switch rather than an
+  # omission: the property has a localhost default in every application.yml, so a release that
+  # simply left it alone would export at its own loopback and log a stack trace for it every
+  # thirty seconds, in six services (charts/seatrush-lib/templates/_env.tpl).
+  #
+  # Empty is still the default here, because the collector is not part of this release: the
+  # observability of README section 24.4 is a facility of the cluster, and a managed cluster
+  # has its own. `make k8s-up` installs it and names it with the values file
+  # deploy/k8s/release-observability-values.yaml, which is the one place that endpoint is
+  # written down.
+  otlpEndpoint: ""
+
+  postgres:
+    # Empty means the one this release installs. A host here with `infra.enabled=false` is a
+    # managed server, and the three databases below have to exist on it.
+    host: ""
+    port: 5432
+    user: seatrush
+    # One database per owning service (README section 11). This map is the only list of them:
+    # the init script of the Postgres pod creates exactly these, and each service names the
+    # key it owns.
+    databases:
+      inventory: seatrush_inventory
+      order: seatrush_order
+      payment: seatrush_payment
+
+  redis:
+    host: ""
+    port: 6379
+
+  kafka:
+    bootstrapServers: ""
+    # The image the broker runs and the image the topics Job talks to it with. One value,
+    # because the Job survives `infra.enabled=false` and the broker does not: a release
+    # against a managed broker still has topics to create, and the client that creates them
+    # has to come from somewhere.
+    image: apache/kafka:4.1.0
+
+  # The four secrets of README section 13. Every one of them is base64 and every one of them
+  # here is deliberately fake: read them and they say so. They are values rather than a
+  # generated pair because two services have to agree on one of them, and a service that
+  # generated its own would refuse what the other signed, which is every purchase answering
+  # 403 (section 6.1).
+  #
+  # Anything that is not a laptop sets `existingSecret` to a Secret it manages itself, from a
+  # sealed secret, an external secrets operator or a CSI driver, and leaves these four empty.
+  secrets:
+    existingSecret: ""
+    # openssl rand -base64 32
+    authSecret: c2VhdHJ1c2ggbG9jYWwgZGV2ZWxvcG1lbnQgb25seSAtLSBub3QgYSBzZWNyZXQgMQ==
+    admissionSecret: c2VhdHJ1c2ggbG9jYWwgZGV2ZWxvcG1lbnQgb25seSAtLSBub3QgYSBzZWNyZXQgMg==
+    postgresPassword: seatrush
+    # The Ed25519 pair tickets are signed with. Empty means order-service generates a
+    # throwaway pair at startup and logs the public half, which is enough to buy a ticket and
+    # not enough to verify one tomorrow.
+    #   openssl genpkey -algorithm ed25519 -outform DER | base64 -w0
+    #   openssl pkey -inform DER -pubout -outform DER <key.der | base64 -w0
+    ticketsPrivateKey: ""
+    ticketsPublicKey: ""
+
+  # The admission lifetime is read by queue-service, which mints the token, and by the
+  # gateway, which checks it. One value, because two would be a door whose halves disagreed
+  # about when a turn ends.
+  admission:
+    tokenTtl: 10m
+
+  # How this system treats an idle stream, whatever it is streaming (README sections 6.2 and
+  # 6.6). Both are read by queue-service and by realtime-service.
+  sse:
+    heartbeatInterval: 15s
+    timeout: 30m
+
+  # The timings of the three probes of every service. One block, because a probe is a
+  # statement about Spring Boot and not about any one service: the startup probe is what
+  # covers a cold start, so the liveness threshold below it can stay short enough to be worth
+  # having once the service is running and wedged.
+  probes:
+    startup:
+      periodSeconds: 3
+      # Two minutes, which is a JVM start, a Flyway migration and a Lua script load on a
+      # node that is also starting five other services.
+      failureThreshold: 40
+    liveness:
+      periodSeconds: 10
+      failureThreshold: 3
+    readiness:
+      periodSeconds: 5
+      failureThreshold: 3
+
+  # Not root, nothing extra, and a root filesystem that cannot be written to. The image of
+  # README section 23 already creates this uid; what is here is the cluster insisting on it,
+  # so an image rebuilt without the USER line would fail to start rather than run as root.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+  # The init containers of a service wait with this, so it is one image and a TCP connect
+  # rather than a client per store (charts/seatrush-lib/templates/_env.tpl).
+  waitImage: busybox:1.37
+
+  # The autoscaling of README section 24.3, which is two mechanisms over six services: an
+  # HPA on CPU for the gateway and inventory-service, an HPA on the SSE connections a pod
+  # holds for queue-service and realtime-service, and a KEDA ScaledObject on consumer group
+  # lag for order-service and payment-service. What scales a given service, and at what
+  # threshold, is in that service's own values; here is only what they share.
+  #
+  # One switch over all six, and it is what a cluster with no metrics pipeline sets: with
+  # this off the release renders the replica counts of the subcharts and refers to no metrics
+  # API and no CRD at all. `make k8s-up` installs what the three readings come from, which is
+  # metrics-server for CPU, prometheus-adapter for the pod metric and KEDA for the lag.
+  autoscaling:
+    enabled: true
+
+    # How the four HPAs and the two KEDA ones are allowed to move, and it is deliberately not
+    # symmetric. Adding a pod during a flash on-sale is urgent: the lobby of README section
+    # 8.1 fills in seconds, so there is no stabilisation window at all on the way up and the
+    # fleet may double in fifteen. Removing one is never urgent and is not free: a pod of
+    # either SSE service takes its clients' connections with it, and a pod of either consumer
+    # hands a batch back to be redelivered. So the way down waits five minutes for the
+    # reading to hold and then moves one pod a minute.
+    behavior:
+      scaleUp:
+        stabilizationWindowSeconds: 0
+        policies:
+          # Whichever is larger, which is what makes this useful at both ends of the range:
+          # the percentage is the one that matters once there are several pods, and the
+          # absolute step is the one that matters when there is one.
+          - type: Percent
+            value: 100
+            periodSeconds: 15
+          - type: Pods
+            value: 2
+            periodSeconds: 15
+        selectPolicy: Max
+      scaleDown:
+        stabilizationWindowSeconds: 300
+        policies:
+          - type: Pods
+            value: 1
+            periodSeconds: 60
+
+  # The seconds between a pod being told to go and the process being told (README section
+  # 24.6). Not a graceful shutdown setting, which is the service's own business: this covers
+  # the window where a pod has been removed from its Service endpoints by one controller and
+  # signalled by another, with neither waiting for the other, during which the ingress
+  # controller and its neighbours are still sending it requests from caches that have not
+  # caught up. Five seconds is what that propagation takes on a cluster this size.
+  #
+  # It is spent in a pre-stop hook, so nothing is waiting for it that was not already waiting,
+  # and it comes out of the termination grace period rather than being added to it.
+  terminationDelay: 5
+
+  # What may take a pod away, and where pods are allowed to be (README section 24.5). Both
+  # arrive with the autoscaling, because neither could say anything true before it: a budget
+  # over a single replica is a statement nothing can satisfy, and a spread over a single pod
+  # is one that is always met.
+  disruption:
+    enabled: true
+    # One at a time, and never `minAvailable`: every service here scales from one, and
+    # `minAvailable: 1` against a single replica is a pod the API server refuses to evict for
+    # ever, so a node drain hangs with the reason three levels inside `kubectl describe pdb`
+    # (charts/seatrush-lib/templates/_disruption.tpl).
+    maxUnavailable: 1
+
+  placement:
+    spread:
+      enabled: true
+      maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      # A preference and not a requirement, which is the arithmetic of the cluster this runs
+      # on: two workers, and an autoscaler that goes to four pods. `DoNotSchedule` would leave
+      # the third and the fourth Pending for ever, which is an autoscaler that does nothing at
+      # the moment it is needed. A real cluster with a node per zone can afford the stricter
+      # one.
+      whenUnsatisfiable: ScheduleAnyway
+
+  # Who may reach a pod of this release, as a rule the API server enforces rather than a shape
+  # of the manifests (README section 24.7). Off is for a cluster whose CNI does not implement
+  # NetworkPolicy, where these objects would be accepted, ignored and mistaken for protection.
+  networkPolicy:
+    enabled: true
+    # The two namespaces outside this release that have to reach into it: the ingress
+    # controller, for the gateway and the client, and the Prometheus of section 24.4, for every
+    # pod that publishes meters. Both are matched on `kubernetes.io/metadata.name`, which the
+    # API server sets on every namespace, so neither needs a label of its own.
+    ingressNamespace: ingress-nginx
+    observabilityNamespace: seatrush-observability
+    # The broker is asked for consumer group lag by KEDA, which runs in its own namespace
+    # (section 24.3). Nothing else of the autoscaling reaches into the release: an HPA reads
+    # the metrics API and never a pod.
+    kedaNamespace: keda
+
+  # Whether the ScaledObjects of order-service and payment-service are rendered at all.
+  #
+  # Separate from the switch above because it is a different question: that one is whether
+  # this release scales, this one is whether the cluster has KEDA's CRD. A manifest of a kind
+  # the API server does not know is not a degraded release, it is an install that fails, so a
+  # cluster without the operator turns this off and keeps the four HPAs, which need nothing
+  # installed beyond the metrics they read.
+  keda:
+    enabled: true
+
+# The one way in (README section 24): the gateway for the API, the client for everything
+# else, and nothing else reachable from outside the cluster at all.
+ingress:
+  enabled: true
+  className: nginx
+  # Empty matches any host, which is what a kind cluster reached at localhost needs. A real
+  # deployment names its host here and adds the TLS block below.
+  host: ""
+  annotations: {}
+  tls: []
+
+# The Job that creates the topics of README section 10.1.
+#
+# Every business topic gets twelve partitions and is keyed by orderId, so all messages of one
+# SAGA are in order, or by eventId, so seat-map updates of one sale are. Each one gets a
+# companion .dlq with three, where a consumer parks a poison message once its retries are
+# exhausted. One broker, so a single replica is the only possible factor.
+topics:
+  enabled: true
+  names:
+    - inventory.seat-events
+    - inventory.commands
+    - inventory.replies
+    - payment.commands
+    - payment.replies
+    - order.events
+  partitions: 12
+  dlqPartitions: 3
+  replicationFactor: 1
+
+# Postgres, Redis and the broker, for a cluster that has none (charts/infra/values.yaml).
+infra:
+  enabled: true

@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.seatrush</groupId>
+    <artifactId>seatrush-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>seatrush-queue-service</artifactId>
+
+  <name>SeatRush Queue Service</name>
+  <description>The lobby, the FIFO waiting room and the admission of buyers into the purchase area</description>
+
+  <dependencies>
+    <!-- UUIDv7 ids, the error codes and the Problem Details factory. -->
+    <dependency>
+      <groupId>com.seatrush</groupId>
+      <artifactId>seatrush-common</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+
+    <!-- The admission token this service signs and the gateway checks (README section 13). -->
+    <dependency>
+      <groupId>com.seatrush</groupId>
+      <artifactId>seatrush-security</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+
+    <!-- The envelope of order.events, the router that dispatches one, and the consumer error
+         policy its listener runs under. Nothing of the outbox is used here: this service
+         consumes and publishes nothing, because it owns no database to write one in. -->
+    <dependency>
+      <groupId>com.seatrush</groupId>
+      <artifactId>seatrush-messaging</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+
+    <!-- The listener on order.events, and the producer the dead letter topic is written
+         with. spring-kafka is optional inside libs/messaging, so a service that consumes
+         asks for it here. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-kafka</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-webmvc</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-validation</artifactId>
+    </dependency>
+    <!-- The whole state of this service is in Redis: a lobby set, a sorted set and three
+         counters per event (README section 9.2). There is no database to migrate, which is
+         why README section 11 lists three and not four. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-redis</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+
+    <!-- The OpenAPI document of this service, served at /v3/api-docs and published under
+         docs/api/ (README section 12). Compile scope rather than test: the document is derived
+         from the running context by the handler mappings springdoc inspects, so a document built
+         without it would describe a different application than the one deployed. -->
+    <dependency>
+      <groupId>org.springdoc</groupId>
+      <artifactId>springdoc-openapi-starter-webmvc-api</artifactId>
+    </dependency>
+    <!-- The Prometheus registry and the shared meter configuration (README section 14.1).
+         Without it the domain meters of this service exist only inside its own process:
+         this is what puts them on /actuator/prometheus, with the histogram buckets the p99
+         panels read and the service tag that says which of the six they came from. -->
+    <dependency>
+      <groupId>com.seatrush</groupId>
+      <artifactId>seatrush-observability</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <!-- One trace across every service of a checkout (README section 14.2). The starter is the
+         whole of it: the auto-configuration that builds a Tracer and a Propagator, the bridge
+         that makes them OpenTelemetry, and the OTLP exporter that ships finished spans to the
+         collector. Those two beans are also what seatrush-messaging carries a trace across the
+         outbox with; without this starter it finds neither and stamps nothing. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-opentelemetry</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- MockMvc and the @WebMvcTest slice, which Boot 4 ships next to the web starter
+         rather than inside spring-boot-starter-test. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-webmvc-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- The shared Redis container and the movable clock of the integration tests. -->
+    <dependency>
+      <groupId>com.seatrush</groupId>
+      <artifactId>seatrush-test-support</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <!-- The layering rules of README section 17. -->
+    <dependency>
+      <groupId>com.tngtech.archunit</groupId>
+      <artifactId>archunit-junit5</artifactId>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+</project>

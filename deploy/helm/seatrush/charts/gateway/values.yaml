@@ -1,0 +1,67 @@
+# The one door into the system (README section 6.1).
+
+replicaCount: 1
+port: 8080
+
+# It reaches the four services it routes to over HTTP, and Redis for the token buckets of
+# README section 13. No database and no broker: a bucket is one small hash that expires by
+# itself, so the limits are the only state this service touches and none of it is its own.
+needs:
+  redis: true
+  kafka: false
+
+env:
+  # Service names, so the cluster resolves them and the gateway never learns how many pods
+  # answer. That is also what makes the autoscaling of README section 24 invisible to it.
+  SEATRUSH_GATEWAY_INVENTORY_URL: http://{{ .Release.Name }}-inventory-service:8081
+  SEATRUSH_GATEWAY_ORDER_URL: http://{{ .Release.Name }}-order-service:8082
+  SEATRUSH_GATEWAY_QUEUE_URL: http://{{ .Release.Name }}-queue-service:8084
+  SEATRUSH_GATEWAY_REALTIME_URL: http://{{ .Release.Name }}-realtime-service:8085
+  SEATRUSH_AUTH_TOKEN_TTL: 1h
+  # The identity provider of README section 13, from the umbrella values. Empty in a `local`
+  # release, where the demo login mints the tokens instead, and demanded by the gateway itself
+  # in the `k8s` profile: an empty jwks uri there is a pod that refuses to start rather than a
+  # fleet that is ready and answers 401 to everything.
+  SEATRUSH_AUTH_JWKS_URI: "{{ .Values.global.auth.jwks.uri }}"
+  SEATRUSH_AUTH_JWKS_ISSUER: "{{ .Values.global.auth.jwks.issuer }}"
+  SEATRUSH_AUTH_JWKS_AUDIENCE: "{{ .Values.global.auth.jwks.audience }}"
+  SEATRUSH_ADMISSION_TOKEN_TTL: "{{ .Values.global.admission.tokenTtl }}"
+  # The one place a trace is born (README section 14.2), so this is the one number that
+  # decides how many there are.
+  SEATRUSH_TRACING_SAMPLE_RATE: "1.0"
+
+# Two secrets and not one: a queue made to sign whatever it liked still could not mint an
+# identity (README section 13). Only this service holds the first.
+secretEnv:
+  SEATRUSH_AUTH_SECRET: auth-secret
+  SEATRUSH_ADMISSION_SECRET: admission-secret
+
+# The only service in the repository that is reactive, because this process holds the SSE
+# connection of every waiting client (README section 6.1). CPU is what it spends, on TLS
+# termination it does not do here, on token validation and on copying stream bytes.
+resources:
+  requests:
+    cpu: 300m
+    memory: 512Mi
+  limits:
+    memory: 1Gi
+
+# CPU, because that is what this service spends and what more pods do more of (README
+# section 24.3). Every request through the door costs token validation and stream copying in
+# proportion to its size, and nothing a pod of this service holds is state: a client whose
+# gateway pod went away reconnects through the Service to another one.
+#
+# 70 percent of the request above, so there is headroom for the burst that arrives while the
+# new pod is starting: a JVM takes tens of seconds to be ready, and a target of 90 would be a
+# fleet that is already saturated by the time the decision is made.
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+
+# Who may reach this service (README section 24.7): the ingress controller, and nothing else.
+# Nothing inside the cluster calls the gateway, which is the shape of section 6.1 read from the
+# other direction, and the policy is where that becomes a rule rather than an arrangement.
+networkPolicy:
+  allowFromIngressController: true

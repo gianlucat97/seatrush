@@ -1,0 +1,495 @@
+openapi: 3.1.0
+info:
+  description: "Events, venue layout, the seat state of a live sale, holds and the\
+    \ record of sales (README section 6.3)."
+  title: SeatRush inventory-service
+  version: 0.1.0
+servers:
+- description: The service itself. The /api paths are reached through the gateway;
+    /internal is not exposed by it (README section 12.7)
+  url: /
+tags:
+- description: "Reading the catalog, an event and the seat map of a sale (README section\
+    \ 12.2)"
+  name: Events and seat map
+- description: "Not exposed by the gateway, and called by another service or by an\
+    \ operator (README section 12.7)"
+  name: Internal
+- description: "Taking seats off the map for the length of a countdown, and giving\
+    \ them back (README section 12.4)"
+  name: Holds
+paths:
+  /api/admin/events:
+    post:
+      operationId: create
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEventRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventResponse"
+          description: OK
+      tags:
+      - Events and seat map
+  /api/admin/events/{eventId}/open:
+    post:
+      operationId: open
+      parameters:
+      - in: path
+        name: eventId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventResponse"
+          description: OK
+      tags:
+      - Events and seat map
+  /api/admin/events/{eventId}/schedule:
+    post:
+      operationId: schedule
+      parameters:
+      - in: path
+        name: eventId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventResponse"
+          description: OK
+      tags:
+      - Events and seat map
+  /api/events:
+    get:
+      operationId: list
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/EventResponse"
+          description: OK
+      tags:
+      - Events and seat map
+  /api/events/{eventId}:
+    get:
+      operationId: details_1
+      parameters:
+      - in: path
+        name: eventId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Details"
+          description: OK
+      tags:
+      - Events and seat map
+  /api/events/{eventId}/holds:
+    post:
+      operationId: place
+      parameters:
+      - in: path
+        name: eventId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: header
+        name: X-User-Id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          type: string
+          pattern: "[\\w-]{1,64}"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HoldRequestBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+          description: OK
+      tags:
+      - Holds
+  /api/events/{eventId}/seatmap:
+    get:
+      operationId: snapshot
+      parameters:
+      - in: path
+        name: eventId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SeatMapResponse"
+          description: OK
+      tags:
+      - Events and seat map
+  /api/holds/{holdId}:
+    delete:
+      operationId: release
+      parameters:
+      - in: path
+        name: holdId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: header
+        name: X-User-Id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "204":
+          description: No Content
+      tags:
+      - Holds
+    get:
+      operationId: details
+      parameters:
+      - in: path
+        name: holdId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: header
+        name: X-User-Id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HoldResponse"
+          description: OK
+      tags:
+      - Holds
+  /internal/events/{eventId}/rebuild:
+    post:
+      operationId: rebuild
+      parameters:
+      - in: path
+        name: eventId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RebuildResponse"
+          description: OK
+      tags:
+      - Internal
+  /internal/holds/{holdId}/freeze:
+    post:
+      operationId: freeze
+      parameters:
+      - in: path
+        name: holdId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FreezeRequestBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FrozenHoldResponse"
+          description: OK
+      tags:
+      - Internal
+components:
+  schemas:
+    CreateEventRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 200
+          minLength: 0
+        onSaleAt:
+          type: string
+          format: date-time
+        sections:
+          type: array
+          items:
+            $ref: "#/components/schemas/SectionRequest"
+          maxItems: 100
+          minItems: 0
+      required:
+      - name
+      - onSaleAt
+      - sections
+    Details:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        onSaleAt:
+          type: string
+          format: date-time
+        seatCount:
+          type: integer
+          format: int32
+        sections:
+          type: array
+          items:
+            $ref: "#/components/schemas/SectionResponse"
+        status:
+          type: string
+          enum:
+          - DRAFT
+          - SCHEDULED
+          - ON_SALE
+          - SOLD_OUT
+          - CLOSED
+    EventResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        onSaleAt:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum:
+          - DRAFT
+          - SCHEDULED
+          - ON_SALE
+          - SOLD_OUT
+          - CLOSED
+    FreezeRequestBody:
+      type: object
+      properties:
+        orderId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+      required:
+      - orderId
+      - userId
+    FrozenHoldResponse:
+      type: object
+      properties:
+        eventId:
+          type: string
+          format: uuid
+        holdId:
+          type: string
+          format: uuid
+        orderId:
+          type: string
+          format: uuid
+        seats:
+          type: array
+          items:
+            $ref: "#/components/schemas/SeatPriceResponse"
+        status:
+          type: string
+        total:
+          $ref: "#/components/schemas/Money"
+        userId:
+          type: string
+          format: uuid
+    HoldRequestBody:
+      type: object
+      properties:
+        seatIds:
+          type: array
+          items:
+            type: string
+            pattern: "[A-Z0-9][A-Z0-9-]{0,47}"
+          maxItems: 50
+          minItems: 0
+      required:
+      - seatIds
+    HoldResponse:
+      type: object
+      properties:
+        eventId:
+          type: string
+          format: uuid
+        expiresAt:
+          type: string
+          format: date-time
+        holdId:
+          type: string
+          format: uuid
+        seatIds:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+        version:
+          type: integer
+          format: int64
+    Money:
+      type: object
+      properties:
+        amountCents:
+          type: integer
+          format: int64
+        currency:
+          type: object
+          properties:
+            currencyCode:
+              type: string
+            defaultFractionDigits:
+              type: integer
+              format: int32
+            displayName:
+              type: string
+            numericCode:
+              type: integer
+              format: int32
+            numericCodeAsString:
+              type: string
+            symbol:
+              type: string
+    RebuildResponse:
+      type: object
+      properties:
+        eventId:
+          type: string
+          format: uuid
+        seats:
+          type: integer
+          format: int32
+    SeatMapResponse:
+      type: object
+      properties:
+        seats:
+          type: array
+          items:
+            $ref: "#/components/schemas/SeatResponse"
+        version:
+          type: integer
+          format: int64
+    SeatPriceResponse:
+      type: object
+      properties:
+        price:
+          $ref: "#/components/schemas/Money"
+        seatId:
+          type: string
+        sectionId:
+          type: string
+    SeatResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        sectionId:
+          type: string
+        status:
+          type: string
+        x:
+          type: integer
+          format: int32
+        "y":
+          type: integer
+          format: int32
+    SectionRequest:
+      type: object
+      properties:
+        currency:
+          type: string
+          pattern: "[A-Z]{3}"
+        id:
+          type: string
+          pattern: "[A-Z0-9][A-Z0-9-]{0,15}"
+        name:
+          type: string
+          maxLength: 100
+          minLength: 0
+        priceCents:
+          type: integer
+          format: int64
+        rows:
+          type: integer
+          format: int32
+          maximum: 500
+          minimum: 1
+        seatsPerRow:
+          type: integer
+          format: int32
+          maximum: 500
+          minimum: 1
+      required:
+      - currency
+      - id
+      - name
+    SectionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        price:
+          $ref: "#/components/schemas/Money"

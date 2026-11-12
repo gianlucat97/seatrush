@@ -1,0 +1,203 @@
+openapi: 3.1.0
+info:
+  description: The checkout SAGA and the orders it produces (README section 6.4).
+  title: SeatRush order-service
+  version: 0.1.0
+servers:
+- description: The service itself. The /api paths are reached through the gateway
+  url: /
+tags:
+- description: Starting a checkout and following the order it produces (README section
+    12.5)
+  name: Orders
+paths:
+  /api/orders:
+    get:
+      operationId: list
+      parameters:
+      - in: header
+        name: X-User-Id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: before
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: limit
+        required: false
+        schema:
+          type: integer
+          format: int32
+          exclusiveMinimum: 0
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderPageResponse"
+          description: OK
+      tags:
+      - Orders
+    post:
+      operationId: start
+      parameters:
+      - in: header
+        name: X-User-Id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartCheckoutBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderResponse"
+          description: OK
+      tags:
+      - Orders
+  /api/orders/{orderId}:
+    get:
+      operationId: details
+      parameters:
+      - in: path
+        name: orderId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: header
+        name: X-User-Id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderResponse"
+          description: OK
+      tags:
+      - Orders
+components:
+  schemas:
+    Money:
+      type: object
+      properties:
+        amountCents:
+          type: integer
+          format: int64
+        currency:
+          type: object
+          properties:
+            currencyCode:
+              type: string
+            defaultFractionDigits:
+              type: integer
+              format: int32
+            displayName:
+              type: string
+            numericCode:
+              type: integer
+              format: int32
+            numericCodeAsString:
+              type: string
+            symbol:
+              type: string
+    OrderItemResponse:
+      type: object
+      properties:
+        price:
+          $ref: "#/components/schemas/Money"
+        seatId:
+          type: string
+    OrderPageResponse:
+      type: object
+      properties:
+        nextBefore:
+          type: string
+          format: date-time
+        orders:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderResponse"
+    OrderResponse:
+      type: object
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+        eventId:
+          type: string
+          format: uuid
+        failureReason:
+          type: string
+          enum:
+          - PAYMENT_DECLINED
+          - SEATS_UNAVAILABLE
+          - TIMEOUT
+        holdId:
+          type: string
+          format: uuid
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderItemResponse"
+        orderId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - PENDING
+          - PAYMENT_AUTHORIZED
+          - SEATS_COMMITTED
+          - CONFIRMED
+          - COMPENSATING
+          - FAILED
+        tickets:
+          type: array
+          items:
+            $ref: "#/components/schemas/TicketResponse"
+        total:
+          $ref: "#/components/schemas/Money"
+    StartCheckoutBody:
+      type: object
+      properties:
+        holdId:
+          type: string
+          format: uuid
+      required:
+      - holdId
+    TicketResponse:
+      type: object
+      properties:
+        issuedAt:
+          type: string
+          format: date-time
+        seatId:
+          type: string
+        signedPayload:
+          type: string
+        ticketId:
+          type: string
+          format: uuid

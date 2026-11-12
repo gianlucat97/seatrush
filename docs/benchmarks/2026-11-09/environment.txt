@@ -1,0 +1,59 @@
+the environment of README section 18.2
+
+the commit
+  revision                          59f34c8e926457407b4166785e67cfcce1680ab1
+  described                         59f34c8
+  tree                              clean
+
+the injector
+  host                              MINGW64_NT-10.0-26200 3.6.5-22c95533.x86_64 x86_64
+  cores visible to it               8
+  jvm                               openjdk version "25.0.1" 2025-10-21 LTS
+  maven                             Apache Maven 3.9.16 (2bdd9fddda4b155ebf8000e807eb73fd829a51d5)
+
+the stack
+  target                            http://localhost:8080
+  container engine                  28.5.2
+  cores it was given                8
+  memory it was given               8267194368 bytes
+
+the knobs of section 22 this stack was started with
+  SEATRUSH_TICKETS_PRIVATE_KEY                  <set, not published>
+  SEATRUSH_TICKETS_PUBLIC_KEY                   <set, not published>
+  SEATRUSH_AUTH_SECRET                          <set, not published>
+  SEATRUSH_ADMISSION_SECRET                     <set, not published>
+  SEATRUSH_QUEUE_CATALOG_REFRESH_INTERVAL       1s
+  SEATRUSH_QUEUE_LOBBY_OPEN_INTERVAL            1s
+  SEATRUSH_ADMISSION_RATE_PER_SECOND            500
+  SEATRUSH_ADMISSION_MAX_ACTIVE_USERS           5000
+  SEATRUSH_ADMISSION_TOKEN_TTL                  10m
+  SEATRUSH_QUEUE_POSITION_UPDATE_INTERVAL       3s
+  SEATRUSH_SSE_HEARTBEAT_INTERVAL               15s
+  SEATRUSH_SSE_TIMEOUT                          30m
+  SEATRUSH_REALTIME_BATCH_WINDOW                200ms
+  SEATRUSH_GATEWAY_INVENTORY_URL                http://localhost:8081
+  SEATRUSH_GATEWAY_ORDER_URL                    http://localhost:8082
+  SEATRUSH_GATEWAY_QUEUE_URL                    http://localhost:8084
+  SEATRUSH_GATEWAY_REALTIME_URL                 http://localhost:8085
+  SEATRUSH_OTLP_ENDPOINT                        http://localhost:4318/v1/traces
+  SEATRUSH_TRACING_SAMPLE_RATE                  1.0
+  SEATRUSH_TRACING_BACKGROUND_SAMPLE_RATE       0.0
+  everything else is the application default of section 22
+
+one replica of each unless this table says otherwise
+CONTAINER                    REPOSITORY                   TAG                 PLATFORM            IMAGE ID            SIZE                CREATED
+seatrush-gateway             seatrush/gateway             dev                 linux/amd64         02249fd3549e        178MB               3 minutes ago
+seatrush-grafana             grafana/grafana              13.2.4              linux/amd64         dbbc38ea2110        483MB               2 weeks ago
+seatrush-inventory-service   seatrush/inventory-service   dev                 linux/amd64         7a25f38fb2a5        189MB               3 minutes ago
+seatrush-kafka               apache/kafka                 4.1.0               linux/amd64         bff074a5d005        236MB               2 weeks ago
+seatrush-kafka-exporter      danielqsj/kafka-exporter     v1.9.0              linux/amd64         4150e46b2e96        14.1MB              4 days ago
+seatrush-kafka-init          apache/kafka                 4.1.0               linux/amd64         bff074a5d005        236MB               2 weeks ago
+seatrush-order-service       seatrush/order-service       dev                 linux/amd64         a76a6f4a2565        181MB               3 minutes ago
+seatrush-payment-service     seatrush/payment-service     dev                 linux/amd64         b6f37c6ab2d7        180MB               3 minutes ago
+seatrush-postgres            postgres                     17-alpine           linux/amd64         eee6c6e1b089        117MB               2 weeks ago
+seatrush-prometheus          prom/prometheus              v3.15.1             linux/amd64         fa3302279710        114MB               2 weeks ago
+seatrush-queue-service       seatrush/queue-service       dev                 linux/amd64         e39810198680        186MB               3 minutes ago
+seatrush-realtime-service    seatrush/realtime-service    dev                 linux/amd64         c8b8f3dc987a        175MB               3 minutes ago
+seatrush-redis               redis                        7.4-alpine          linux/amd64         57e4255cc971        16.3MB              2 weeks ago
+seatrush-tempo               grafana/tempo                2.9.1               linux/amd64         290414580eab        36.4MB              4 days ago
+seatrush-ui                  seatrush/seat-map-ui         dev                 linux/amd64         113d43ba9bee        26.1MB              3 minutes ago

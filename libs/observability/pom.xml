@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.seatrush</groupId>
+    <artifactId>seatrush-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>seatrush-observability</artifactId>
+
+  <name>SeatRush Observability</name>
+  <description>The Prometheus registry every service exports through, the service tag its meters carry and the histogram buckets the dashboards read percentiles out of</description>
+
+  <dependencies>
+    <!-- The registry itself. This is the dependency that turns the meters the services have
+         been registering since M1 into something readable: it is what makes Boot publish the
+         /actuator/prometheus endpoint, and without it every counter in this system is a
+         number that only ever existed inside its own process. -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-registry-prometheus</artifactId>
+    </dependency>
+    <!-- MeterFilter and DistributionStatisticConfig, which is all the configuration below is. -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-core</artifactId>
+    </dependency>
+    <!-- The two ServerRequestObservationContext classes the actuator predicate recognises, one
+         per web stack: the five services behind the gateway are servlet applications and the
+         gateway is reactive. Both classes live here, so one predicate covers both without this
+         module knowing which stack it is on. -->
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-web</artifactId>
+    </dependency>
+    <!-- Compiled against, not shipped: the servlet observation context hands out an
+         HttpServletRequest, so its signature has to resolve here, and every servlet service
+         brings the implementation with its Tomcat. The gateway brings none at all, which is
+         why the predicate that touches it is behind a condition on the kind of application. -->
+    <dependency>
+      <groupId>jakarta.servlet</groupId>
+      <artifactId>jakarta.servlet-api</artifactId>
+      <scope>provided</scope>
+    </dependency>
+    <!-- Auto-configuration of the three beans. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-autoconfigure</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- The reactive mocks of the predicate test: a MockServerHttpResponse is a reactive type,
+         so reactor is needed to compile against it. Test only. The reactive predicate itself
+         touches nothing reactive beyond the request path. -->
+    <dependency>
+      <groupId>io.projectreactor</groupId>
+      <artifactId>reactor-core</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- Both halves of the actuator predicate are behind a condition on the kind of application,
+         and @ConditionalOnWebApplication(REACTIVE) looks for WebFlux rather than for the reactive
+         context class. Without it on the test classpath the test would assert the condition is
+         false for the reason the gateway is not. -->
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-webflux</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- The actuator a service brings, so the tests run against the machinery that actually
+         applies a MeterFilter bean to a registry rather than against a filter called by hand:
+         that Boot collects these beans at all is half of what this module relies on. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+</project>

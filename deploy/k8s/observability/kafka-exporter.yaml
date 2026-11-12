@@ -1,0 +1,107 @@
+# Consumer group lag and the depth of the dead letter topics (README sections 14.1, 24.4).
+#
+# The same exporter and the same version the local stack runs, for the one number no service
+# can report about itself: a consumer knows the offset it has committed and not the offset
+# the log is at. It is what the dead letter rule of section 14.4 reads, since nothing
+# consumes a `.dlq` topic and its depth is a fact about the broker.
+#
+# On a first install it starts before the broker it is pointed at exists, because the add-ons
+# of section 24.4 are installed before the release and the release is what brings the broker.
+# What that costs is a minute of connection errors in this pod's log and a `kafka` target that
+# is down in Prometheus until the release is up. Not an init container waiting on the broker,
+# because the honest version of that wait is the one this already does: an exporter whose
+# broker has gone is an exporter that keeps trying, and a release reinstalled under a running
+# cluster has to be survived either way.
+#
+# It is not what the autoscaling reads. The ScaledObjects of section 24.3 ask the broker
+# through KEDA's own admin client, so a pod is added without waiting for a scrape and this
+# exporter being down costs the dashboards and the alert rather than the scaling.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-exporter
+  labels:
+    app.kubernetes.io/name: kafka-exporter
+    app.kubernetes.io/part-of: seatrush-observability
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 9308
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: kafka-exporter
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-exporter
+  labels:
+    app.kubernetes.io/name: kafka-exporter
+    app.kubernetes.io/part-of: seatrush-observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kafka-exporter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kafka-exporter
+        app.kubernetes.io/part-of: seatrush-observability
+      annotations:
+        seatrush.io/config-checksum: unset
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: kafka-exporter
+          image: danielqsj/kafka-exporter:v1.9.0
+          args:
+            # The broker of the release, which is the one thing here that depends on where
+            # SeatRush is installed. Kubernetes expands $(VAR) in args from the container's
+            # own environment, so the address arrives from the ConfigMap
+            # scripts/k8s-observability.sh writes it into rather than being baked into this
+            # file with a release name somebody has to keep in step.
+            - --kafka.server=$(KAFKA_BOOTSTRAP_SERVERS)
+            # Everything, because every topic of README section 10.1 has a companion .dlq
+            # and the point of watching those is that they are normally empty.
+            - --topic.filter=.*
+            - --group.filter=.*
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              valueFrom:
+                configMapKeyRef:
+                  name: seatrush-release
+                  key: kafka-bootstrap-servers
+          ports:
+            - name: http
+              containerPort: 9308
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 192Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL

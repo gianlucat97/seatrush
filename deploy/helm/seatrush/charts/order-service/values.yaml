@@ -1,0 +1,60 @@
+# The checkout SAGA and the tickets it issues (README section 6.4).
+
+replicaCount: 1
+port: 8082
+
+database: order
+needs:
+  redis: false
+  kafka: true
+
+env:
+  # The synchronous freeze of README section 12.7, which is the first thing a checkout does.
+  SEATRUSH_INVENTORY_BASE_URL: http://{{ .Release.Name }}-inventory-service:8081
+  SEATRUSH_CHECKOUT_TIMEOUT: 2m
+
+# The Ed25519 pair tickets are signed with (README section 13), from the release Secret.
+# Never an env value: a private key in a values file is a private key in the release.
+secretEnv:
+  SEATRUSH_TICKETS_PRIVATE_KEY: tickets-private-key
+  SEATRUSH_TICKETS_PUBLIC_KEY: tickets-public-key
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    memory: 1Gi
+
+# Consumer group lag, through KEDA (README section 24.3). This service is a consumer and a
+# scheduler, so neither CPU nor a count of connections describes it: its pods can be idle
+# with a hundred replies waiting, because what bounds them is the partitions the group has
+# been assigned and the time one reply takes to advance a SAGA.
+#
+# Two topics in one group, since a checkout advances on replies from both inventory and
+# payment (README section 8.3): a backlog on either one is a buyer waiting at the Pay button
+# with nothing answering.
+#
+# 50 records per pod, which is a figure about the deadline rather than about throughput. A
+# SAGA has the `seatrush.checkout.timeout` of section 22 to reach its pivot, and a reply that
+# waits in a partition is time taken out of it; at the rate a pod answers replies, fifty is
+# well inside it and a backlog twice that is a pod too few.
+keda:
+  enabled: true
+  minReplicaCount: 1
+  # Four on a laptop. Twelve is the real ceiling and the broker is what enforces it: a group
+  # with more consumers than the partitions of README section 10.1 leaves the extra ones
+  # assigned nothing at all.
+  maxReplicaCount: 4
+  consumerGroup: order-service
+  lagThreshold: 50
+  topics:
+    - inventory.replies
+    - payment.replies
+
+# Who may reach this service (README section 24.7). Only the gateway: a checkout is started by
+# a buyer and advanced by replies on a topic, so nothing else in the release has a reason to
+# call it. The `/internal/**` endpoints of section 12.7 are inventory's, not this service's.
+networkPolicy:
+  allowFrom:
+    - gateway

@@ -1,0 +1,64 @@
+# Owns the seat map, the holds and the sale (README section 6.3).
+
+replicaCount: 1
+port: 8081
+
+# The one of the databases of README section 11 this service owns. Naming it is what wires
+# POSTGRES_URL, the password from the release Secret and the init container that waits for
+# the server to accept connections.
+database: inventory
+needs:
+  # The seat state, the holds, the expiry ZSET and the seat event stream (section 9.2).
+  redis: true
+  # Commands, replies and the seat events the stream relay forwards (section 10.1).
+  kafka: true
+
+# The hold path (README section 22). Everything else this service reads has the default of
+# its application.yml, which is the value section 22 documents: a chart that repeated all
+# twenty of them would be twenty places for a default to drift from the service's own.
+env:
+  SEATRUSH_HOLD_TTL: 5m
+  SEATRUSH_HOLD_MAX_SEATS: "6"
+
+# The CPU request is also the denominator of this service's HPA, which is what makes it a
+# capacity statement rather than the scheduling floor it is for everything else in this chart
+# (README section 24.3). 500 millicores and not the 200 the other services ask for, because
+# this pod is never idle: the sweeper runs every second, the outbox relay and the seat event
+# relay ten times a second, the reconciler every thirty, and the sale metrics sample every
+# five. Measured on a kind cluster with no sale running at all, that costs 80 millicores,
+# which against a 200 millicore request is 40 percent of the way to a 70 percent target
+# before a single buyer has arrived.
+#
+# Still no CPU limit anywhere in this chart: a JVM throttled by the cgroup period stalls in
+# the middle of a hold, and the admission rate of section 6.2 is what bounds the load rather
+# than a quota.
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    memory: 1Gi
+
+# CPU, for the same reason as the gateway (README section 24.3): the hold path is one Lua
+# call per request and the cost of a pod is the requests it answers.
+#
+# The thing this does not scale is Redis, which is one instance and the serialization point
+# of every hold (README section 9.1). More inventory pods answer more HTTP in parallel and
+# send their EVALSHA to the same place, so the ceiling of this service is that server's and
+# not a replica count. That is a property of the design rather than a limit of the chart: the
+# per-section sharding of section 26 is what raises it.
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+
+# Who may reach this service (README section 24.7). Three callers and each one is a flow of
+# section 8: the gateway proxies the seat map and the holds, order-service makes the synchronous
+# freeze of section 12.7, and queue-service reads the event catalog to know which sales are open
+# (ADR-0015).
+networkPolicy:
+  allowFrom:
+    - gateway
+    - order-service
+    - queue-service

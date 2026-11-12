@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.seatrush</groupId>
+    <artifactId>seatrush-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>seatrush-messaging</artifactId>
+
+  <name>SeatRush Messaging</name>
+  <description>The message envelope and catalog, their JSON encoding, the Postgres outbox and the idempotent consumer, shared by every producer and consumer</description>
+
+  <dependencies>
+    <!-- Money and the id generator the envelope stamps every message with. -->
+    <dependency>
+      <groupId>com.seatrush</groupId>
+      <artifactId>seatrush-common</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <!-- Jackson 3, the serialization of the wire format (README section 10.3). -->
+    <dependency>
+      <groupId>tools.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+    <!-- Auto-configuration of the factory and the codec beans. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-autoconfigure</artifactId>
+    </dependency>
+
+    <!-- The relay and the publisher report what they could not get to the broker. API only:
+         the service on the classpath decides the backend. -->
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+    </dependency>
+
+    <!-- The trace that crosses the outbox (README section 14.2). API only, like slf4j above: the
+         envelope and the router are shared by every service, and which backend exports a span is
+         the service's decision. A build with neither a Tracer nor a Propagator bean gets
+         MessageTracing.none() and stamps nothing. -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-tracing</artifactId>
+    </dependency>
+
+    <!-- Everything below is optional: it belongs to the outbox half of this module, and the
+         services that only produce or consume messages (realtime, queue, gateway) have no
+         database and must not inherit a JDBC or a Kafka client by depending on the envelope.
+         The auto-configuration is conditional on the same classes, so a service gets the
+         outbox exactly when it brings its own starters. -->
+    <!-- JdbcClient, the outbox table and the processed_message table. -->
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-jdbc</artifactId>
+      <optional>true</optional>
+    </dependency>
+    <!-- TransactionTemplate and the check that an append really is joining a transaction. -->
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-tx</artifactId>
+      <optional>true</optional>
+    </dependency>
+    <!-- The producer the relay publishes with. -->
+    <dependency>
+      <groupId>org.springframework.kafka</groupId>
+      <artifactId>spring-kafka</artifactId>
+      <optional>true</optional>
+    </dependency>
+    <!-- The outbox lag gauge of README section 14.1. -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-core</artifactId>
+      <optional>true</optional>
+    </dependency>
+    <!-- The readiness contributors of README section 24.6. Health moved out of the actuator
+         into its own module in Boot 4, which is the one this needs: the contributors here
+         report on a relay and on listener containers and touch no endpoint. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-health</artifactId>
+      <optional>true</optional>
+    </dependency>
+    <!-- The bounds on the relay properties. -->
+    <dependency>
+      <groupId>jakarta.validation</groupId>
+      <artifactId>jakarta.validation-api</artifactId>
+      <optional>true</optional>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- A real backend for the tracing tests. The round trip of a traceparent is the whole
+         point of MicrometerMessageTracing, and a stub propagator would assert that this module
+         calls itself correctly rather than that a context survives the journey. -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-tracing-bridge-otel</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.opentelemetry</groupId>
+      <artifactId>opentelemetry-sdk</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- The Kafka auto-configuration a service brings with its starter. The main code names it
+         only as a string, so that a service without a broker does not inherit it; the consumer
+         test needs the real class, because the listener container it asserts on is what that
+         auto-configuration builds. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-kafka</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- The validation provider every service brings with spring-boot-starter-validation.
+         OutboxProperties is @Validated like the properties of a service, so the test classpath
+         has to be a service's classpath: without a provider the binding fails at startup, and
+         that is a failure these tests must see here rather than in a service. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-validation</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- MutableClock and the shared Postgres and Kafka containers of the outbox tests. -->
+    <dependency>
+      <groupId>com.seatrush</groupId>
+      <artifactId>seatrush-test-support</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <!-- The pool the outbox integration tests claim rows through: the concurrency test runs
+         many relays at once, which is the one thing a connection per call cannot show. -->
+    <dependency>
+      <groupId>com.zaxxer</groupId>
+      <artifactId>HikariCP</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- The message contract test of README section 17: it validates every sample message against
+         the schema generated from its record, which is what makes docs/messages/ a contract rather
+         than a description. -->
+    <dependency>
+      <groupId>com.networknt</groupId>
+      <artifactId>json-schema-validator</artifactId>
+    </dependency>
+
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+      </plugin>
+      <!-- The outbox is the first thing in this module that needs a real Postgres and a real
+           broker, so its tests are *IT and Failsafe runs them. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+</project>

@@ -1,0 +1,188 @@
+# The defaults point at the Docker Compose stack of deploy/docker-compose, so the service
+# starts against make up with no configuration. Every value is overridable by environment
+# variable, which is how the container and the Helm chart set them (README section 22).
+spring:
+  application:
+    name: inventory-service
+  threads:
+    # Virtual threads: every request of this service blocks on Postgres or Redis, and the
+    # platform thread pool is exactly the limit README section 15 does not want (section 19).
+    virtual:
+      enabled: true
+  datasource:
+    url: ${POSTGRES_URL:jdbc:postgresql://localhost:5432/seatrush_inventory}
+    username: ${POSTGRES_USER:seatrush}
+    password: ${POSTGRES_PASSWORD:seatrush}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      # README section 10.3: nothing is published unless every in-sync replica has it, and a
+      # retried send cannot become a second message.
+      acks: all
+      properties:
+        enable.idempotence: true
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    consumer:
+      # One group for the whole deployment: a command is performed by exactly one pod. That is
+      # the opposite of the broadcast pattern realtime uses for seat events.
+      group-id: ${KAFKA_GROUP_ID:inventory-service}
+      # Commands that arrived while every pod was down are still commands.
+      auto-offset-reset: earliest
+      # The container commits the offset itself, after the handler has returned.
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+  data:
+    redis:
+      # The seat state of a live sale (README section 9.2).
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+  flyway:
+    # The service owns the schema of its own database and migrates it on startup.
+    enabled: true
+    locations: classpath:db/migration
+  jackson:
+    datatype:
+      datetime:
+        # Instants as ISO-8601 strings, the format README section 12 publishes. Set
+        # explicitly because it is part of the contract, not because Jackson 3 would
+        # default the other way. In Jackson 3 this switch moved out of the
+        # serialization features, so the key is no longer spring.jackson.serialization.
+        write-dates-as-timestamps: false
+
+# The hold path (README section 22).
+seatrush:
+  hold:
+    # Five minutes is long enough to pick a payment method and short enough that a seat
+    # abandoned by one user is back before the next one gives up looking.
+    ttl: ${SEATRUSH_HOLD_TTL:5m}
+    # Anti-hoarding: one hold is a group of friends, not a reseller's basket.
+    max-seats: ${SEATRUSH_HOLD_MAX_SEATS:6}
+    # The sweeper runs on every pod, so a second of lag costs nothing and the seats of an
+    # abandoned hold are back almost immediately.
+    sweeper-interval: ${SEATRUSH_HOLD_SWEEPER_INTERVAL:1s}
+    sweeper-batch-size: ${SEATRUSH_HOLD_SWEEPER_BATCH_SIZE:500}
+  sale-opener:
+    # How often the catalog is asked whether a sale is due, which is also how late a sale can
+    # open (README sections 6.3 and 22). One second, because this is the figure a flash on-sale
+    # is organised around: the lobby is drawn in a random order the instant the doors open, so
+    # a late opening treats everybody waiting equally, but a minute of it would be a minute of
+    # a published start time being wrong.
+    interval: ${SEATRUSH_SALE_OPENER_INTERVAL:1s}
+    # A pass holds a row lock while it warms Redis up, so it takes a few sales and not a catalog.
+    batch-size: ${SEATRUSH_SALE_OPENER_BATCH_SIZE:20}
+  reconciler:
+    # The window of README section 9.6 step 5: a pod that died between the sale and the seat map.
+    # Seconds and not milliseconds, because nothing is wrong while this waits, the seats are
+    # unavailable to everybody either way, and only the hold is left dangling.
+    interval: ${SEATRUSH_RECONCILER_INTERVAL:30s}
+    batch-size: ${SEATRUSH_RECONCILER_BATCH_SIZE:500}
+  consumer:
+    # Bounded retries and then the dead letter topic (README sections 10.3 and 16).
+    retries: ${SEATRUSH_CONSUMER_RETRIES:3}
+    retry-backoff: ${SEATRUSH_CONSUMER_RETRY_BACKOFF:500ms}
+    retry-max-backoff: ${SEATRUSH_CONSUMER_RETRY_MAX_BACKOFF:5s}
+  outbox:
+    # The Postgres outbox of README section 9.5, which seatrush-messaging contributes to every
+    # service that owns a database. Both values are the defaults of README section 22 and are
+    # repeated here only so a deployment can override them by environment variable.
+    poll-interval: ${SEATRUSH_OUTBOX_POLL_INTERVAL:100ms}
+    batch-size: ${SEATRUSH_OUTBOX_BATCH_SIZE:500}
+  sale-metrics:
+    # How often the seats left of every live sale are read, for the two gauges the sold out
+    # progress of README section 14.4 is computed from. It only has to be finer than the scrape
+    # interval of section 14.1, since nothing reads a gauge faster than Prometheus does, and the
+    # whole pass is one Redis read per open sale.
+    interval: ${SEATRUSH_SALE_METRICS_INTERVAL:5s}
+  stream-relay:
+    # The seat map of every client is at most this far behind the seat state in Redis, so it is
+    # tens of milliseconds. A blocking XREADGROUP is not used because the streams are per event
+    # and the set of open sales changes while the service runs.
+    poll-interval: ${SEATRUSH_STREAM_RELAY_POLL_INTERVAL:100ms}
+    batch-size: ${SEATRUSH_STREAM_RELAY_BATCH_SIZE:500}
+    # Long enough that a slow publish is not stolen from a relay still working on it.
+    claim-idle-after: ${SEATRUSH_STREAM_RELAY_CLAIM_IDLE_AFTER:30s}
+
+# How long this process is allowed to take to stop, and it is arithmetic rather than a
+# preference (README section 24.6). The chart gives a pod 45 seconds and sleeps 5 of them
+# before the signal, so what is left for the process is 40: at most 10 for the web server to
+# finish what it is serving, 10 for the Kafka containers to commit where they got to, and 10
+# for a relay pass to finish, which leaves the last 10 as the margin before the kubelet stops
+# asking.
+#
+# `server.shutdown` is not set here, because graceful is already the default in Boot 4. What
+# that means for the two streaming services is only a bound: an SSE exchange does not finish
+# on its own, so they close their streams on the context closing and the timeout below is
+# what covers whatever is left (see QueueStreams and SeatMapStreams).
+spring.lifecycle.timeout-per-shutdown-phase: 10s
+spring.task.scheduling.shutdown.await-termination: true
+spring.task.scheduling.shutdown.await-termination-period: 10s
+
+server:
+  port: ${SERVER_PORT:8081}
+
+# The OpenAPI document of README section 12, served at /v3/api-docs and published under docs/api/.
+# Both settings are about the bytes rather than the content: the published file is compared byte
+# for byte by the test that generates it, so the writer has to produce the same document twice.
+# Keys in a defined order instead of the order reflection happened to visit them in, and one
+# pretty printer instead of whichever one the response happened to be written with.
+springdoc:
+  writer-with-order-by-keys: true
+  writer-with-default-pretty-printer: true
+  # What these endpoints answer with, which the mappings do not say because there is nothing in
+  # Spring MVC that needs telling: a method returning a record produces JSON. Unset, springdoc
+  # describes every response as */*, which is true of the content negotiation and useless to a
+  # reader. The endpoints that produce something else say so on their own mapping and keep it.
+  default-produces-media-type: application/json
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # Health for the container probe, info for the build it is running, prometheus for the
+        # scrape of deploy/prometheus (README section 14.1). Three and not the wildcard: the
+        # rest of the actuator reads configuration, beans and environment, and this port is
+        # open to everything inside the network by design (README section 13).
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      group:
+        readiness:
+        # What this pod has to have in place to be sent a request (README section 24.6).
+        # Four names and every one of them is a fact about this pod: the Spring readiness
+        # state, the two relays still completing passes, and the listener containers running.
+        #
+        # Deliberately not the database and not Redis, which Boot would contribute happily.
+        # Every hold this service answers needs both, so a probe that failed on them would be
+        # right about this pod and catastrophic about the fleet: one Redis blip and all four
+        # pods leave the Service at the same instant, which turns a slow store into a 503 for
+        # every buyer. A store that is down is a page on a dashboard (section 14.4), not a
+        # fleet that removes itself.
+        #
+        # Membership is validated at startup, so a name that is not a contributor here is a
+        # service that refuses to start rather than a probe quietly checking less.
+          include: readinessState,outboxRelay,streamRelay,kafkaListeners
+  tracing:
+    sampling:
+      # No roots. The sampler is parent based, so zero does not mean "no traces": it means this
+      # service never starts one of its own and always continues one that arrives, over HTTP or
+      # in a message envelope. Every trace worth having is a request through the gateway, and
+      # the alternative is a flood: the relays tick ten times a second and the schedulers once,
+      # almost always finding nothing, and each tick would be a trace of its own with every
+      # Redis command it made hanging underneath it.
+      #
+      # Raise it on one service to look at its background work, which is the case this is a knob
+      # for. What those jobs do is otherwise in the metrics of README section 14.1.
+      probability: ${SEATRUSH_TRACING_BACKGROUND_SAMPLE_RATE:0.0}
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          # The collector of deploy/docker-compose, over the port it publishes to the host. A
+          # service started inside the stack network reaches it by name instead. There is no
+          # default: an endpoint left unset means no exporter at all, so a service would carry a
+          # trace through every hop and then drop it on the floor.
+          endpoint: ${SEATRUSH_OTLP_ENDPOINT:http://localhost:4318/v1/traces}

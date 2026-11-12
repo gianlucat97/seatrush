@@ -1,0 +1,6 @@
+apiVersion: v2
+name: order-service
+description: The checkout SAGA and the tickets it issues (README section 6.4)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

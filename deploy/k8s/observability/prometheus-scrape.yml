@@ -1,0 +1,100 @@
+# Scrape configuration of the cluster (README section 24.4), mounted as prometheus.yml.
+#
+# Named for what it is rather than for the name it is mounted under, so that it does not sit
+# in this directory one letter away from prometheus.yaml, which is the Deployment that reads
+# it.
+#
+# The second of two, and the only observability file this repository has twice. The local
+# stack's deploy/prometheus/prometheus.yml names six containers on a Compose network, and
+# there is no arrangement of relabelling that turns one of those files into the other: a
+# target list is the thing that differs between a stack where every service is one container
+# and a cluster where a service is a Service in front of a changing number of pods.
+#
+# Everything else is read from the file the local stack reads. The alert rules of README
+# section 14.4 are deploy/prometheus/alerts.yml, mounted into the same directory as this
+# file by scripts/k8s-observability.sh, which is why `rule_files` below is a bare name: five
+# rules in one place, fired by both deployments.
+global:
+  # The same ten seconds as the local stack, for the same reason: the interesting window of
+  # an on-sale is the first minute of it.
+  scrape_interval: 10s
+  evaluation_interval: 10s
+  external_labels:
+    environment: kind
+
+rule_files:
+  - alerts.yml
+
+# No Alertmanager here either. A firing rule is visible under Alerts in the Prometheus UI,
+# which is what a demo of the rules needs, and the receiver is the one piece of this that
+# belongs to a real deployment rather than to a laptop.
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # The services of README section 6, discovered rather than listed.
+  #
+  # Pods and never the Services in front of them, which is the whole point of discovery here:
+  # a Service load balances, so a scrape of one would land on a different pod every ten
+  # seconds, and `seatrush_sse_connections` is a gauge whose entire meaning is per pod
+  # (section 14.1), so it would read as a sawtooth over the fleet. Autoscaling makes that
+  # certain rather than likely, and the autoscaler reads this same metric back out.
+  #
+  # The label selector is applied by the API server rather than by a relabel rule, so this
+  # Prometheus watches the pods of a SeatRush release and not every pod in the cluster.
+  # What is kept out of it is everything in section 24.4: it does not scrape itself twice,
+  # it does not scrape Grafana, and it does not scrape KEDA or the adapter. Those are the
+  # cluster's own facilities, and what they would measure is the monitoring (section 14.1).
+  - job_name: seatrush
+    kubernetes_sd_configs:
+      - role: pod
+        selectors:
+          - role: pod
+            label: app.kubernetes.io/part-of=seatrush
+    relabel_configs:
+      # The three annotations the chart puts on a Spring Boot pod and not on the client
+      # (charts/seatrush-lib/templates/_deployment.tpl). Keeping on the first of them is
+      # what leaves the client, the infrastructure pods and every init container out,
+      # without this file holding a list of what they are.
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+)
+      # The pod's IP with the annotated port, because discovery gives the first declared
+      # container port and a pod that declared none at all would otherwise be scraped on 80.
+      - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        action: replace
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2
+        target_label: __address__
+      # The two labels the custom metrics API is addressed by. prometheus-adapter answers a
+      # question about a named pod in a named namespace (section 24.4), so a series without
+      # both of these is a series an HPA cannot be pointed at.
+      - source_labels: [__meta_kubernetes_namespace]
+        action: replace
+        target_label: namespace
+      - source_labels: [__meta_kubernetes_pod_name]
+        action: replace
+        target_label: pod
+      # Which service produced the series is still read off the `service` tag every meter
+      # carries (section 14.1), and this is deliberately not that: it is the workload the
+      # pod belongs to, for the one question discovery can answer and a meter cannot, which
+      # is which pods of a fleet exist right now.
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+        action: replace
+        target_label: workload
+
+  # Consumer group lag, which is the one number about Kafka no service can report about
+  # itself (README section 14.1), and where the dead letter rule of section 14.4 reads from.
+  #
+  # KEDA does not read it here. The ScaledObjects of section 24.3 ask the broker directly,
+  # so the two consumers scale without waiting for a scrape, and this exporter is for the
+  # dashboards and the alert.
+  - job_name: kafka
+    static_configs:
+      - targets: ["kafka-exporter:9308"]

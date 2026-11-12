@@ -1,0 +1,47 @@
+# Removes the head branch of a merged pull request from origin, so the remote only ever
+# shows the branches somebody is still working on (README section 21).
+#
+# Only the short lived kinds are removed: feature/*, bugfix/* and test/*. master and
+# develop are long lived, and the ruleset that protects them refuses their deletion
+# anyway, so this workflow and the repository rules say the same thing twice.
+#
+# Nothing is deleted locally. A clone is the author's, and the branch they just merged is
+# often the one they are about to build on.
+name: Delete merged branch
+
+on:
+  pull_request:
+    types: [closed]
+
+# One ref deleted through the API, which is all the token here is for.
+permissions:
+  contents: write
+
+jobs:
+  delete:
+    name: Delete the head branch on origin
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # A pull request closed without merging keeps its branch: not merging it is usually
+    # the reason there is still something on it. A branch of a fork is not ours to delete.
+    if: >-
+      github.event.pull_request.merged == true
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && (startsWith(github.event.pull_request.head.ref, 'feature/')
+      || startsWith(github.event.pull_request.head.ref, 'bugfix/')
+      || startsWith(github.event.pull_request.head.ref, 'test/'))
+    steps:
+      - name: Delete the branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        # The ref is read before it is deleted, so that a branch somebody removed by hand
+        # between the merge and this run is reported rather than failing the workflow.
+        run: |
+          if gh api "repos/$REPOSITORY/git/ref/heads/$BRANCH" > /dev/null 2>&1; then
+            gh api -X DELETE "repos/$REPOSITORY/git/refs/heads/$BRANCH"
+            echo "deleted $BRANCH on origin"
+          else
+            echo "$BRANCH is already gone on origin"
+          fi

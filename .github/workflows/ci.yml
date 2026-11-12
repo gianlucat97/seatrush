@@ -1,0 +1,279 @@
+# Format check, build, unit tests and integration tests for every push and pull
+# request on the long-lived branches (README section 20).
+name: CI
+
+on:
+  push:
+    branches: [develop, master]
+  pull_request:
+    branches: [develop, master]
+  workflow_dispatch:
+
+# A newer push on the same ref supersedes the run already in flight.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    name: Format check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      # Fails on unformatted Java, POM and YAML before the build is paid for.
+      # The same check also runs in the validate phase of the build below.
+      - name: Spotless
+        run: ./mvnw -B -ntp spotless:check
+
+      # The local stack is configuration, so nothing in the build would catch a
+      # Compose file that no longer parses or an alert rule with a broken
+      # expression. Both checks are static: no container of the stack is started.
+      - name: Validate the local stack
+        run: |
+          docker compose \
+            --file deploy/docker-compose/docker-compose.yml \
+            --env-file .env.example \
+            config --quiet
+          docker run --rm \
+            --volume "$PWD/deploy/prometheus:/etc/prometheus:ro" \
+            --entrypoint promtool \
+            prom/prometheus:v3.15.1 \
+            check config /etc/prometheus/prometheus.yml
+
+      # The cluster has a scrape config of its own, because a list of six containers on a
+      # Compose network is not a pod discovery (README section 24.4). It is the only
+      # observability file this repository has twice, and the alert rules are not: they are
+      # the same deploy/prometheus/alerts.yml, which is why the two files are copied into
+      # one directory here. That is exactly what the ConfigMap of the cluster does, so
+      # `rule_files` resolving is part of what this checks.
+      - name: Validate the cluster scrape config
+        run: |
+          mkdir -p target/cluster-prometheus
+          cp deploy/k8s/observability/prometheus-scrape.yml \
+             target/cluster-prometheus/prometheus.yml
+          cp deploy/prometheus/alerts.yml target/cluster-prometheus/
+          docker run --rm \
+            --volume "$PWD/target/cluster-prometheus:/etc/prometheus:ro" \
+            --entrypoint promtool \
+            prom/prometheus:v3.15.1 \
+            check config /etc/prometheus/prometheus.yml
+
+      # The dashboards are configuration too, and they fail quietly: Grafana logs the
+      # provisioning error and serves the folder without the dashboard, so the first person
+      # to notice is whoever opens it during an incident. The script checks the JSON, the
+      # uids, the panel grid and the datasource, and writes every query out as a rule so
+      # that promtool parses all 57 of them in one pass.
+      - name: Validate the dashboards
+        run: |
+          mkdir -p target/dashboard-rules
+          python scripts/check-dashboards.py \
+            --rules target/dashboard-rules/expressions.yml
+          docker run --rm \
+            --volume "$PWD/target/dashboard-rules:/rules:ro" \
+            --entrypoint promtool \
+            prom/prometheus:v3.15.1 \
+            check rules /rules/expressions.yml
+
+      # The ADRs of README section 25, which fail by drifting rather than by breaking. A table row
+      # with no file is a decision somebody looked for and did not find; a file with no row is a
+      # decision nobody will ever look for. Neither breaks a build on its own, which is why the
+      # correspondence is checked in both directions here along with the four sections the section
+      # promises and the titles agreeing exactly.
+      - name: Validate the ADRs
+        run: python scripts/check-adrs.py
+
+      # The README against the repository it describes. It is the specification of this system and
+      # it is two thousand lines of cross references, which is the condition under which a document
+      # stops being checked by anyone reading it: a link to a renamed heading still renders as a
+      # link, a path that moved still reads like a path, and a section that was renumbered leaves
+      # every link to it pointing somewhere real and wrong. None of that breaks a build, which is
+      # exactly why it is worth a job.
+      - name: Validate the README
+        run: python scripts/check-readme.py
+
+      # The functional specification of docs/frd/, which has one failure mode the README does not:
+      # it numbers forty-seven requirements and then points every one of them at a README section,
+      # an ADR and a test method. Every cell of that matrix is a fact about a file somebody else
+      # edits. A test renamed in Java leaves a row naming a method nobody can find, a requirement
+      # renamed in the catalogue and not in the matrix still renders, and a requirement cited in a
+      # journey and never defined reads exactly like one that was.
+      - name: Validate the functional specification
+        run: python scripts/check-frd.py
+
+      # The Helm chart of README section 24, which fails in three quiet ways. A manifest
+      # Kubernetes would reject is a release that half-applies, and the first half is
+      # whichever objects sorted earlier; a chart that has drifted from the Compose stack
+      # runs a service on a default nobody chose; and a URL naming the wrong port renders
+      # without complaint and answers 503 the first time anybody buys a seat.
+      #
+      # Three shapes of the release are rendered, because they are three different code
+      # paths. Helm drops a disabled subchart's values, so a template of the umbrella that
+      # read one of them would work with the infrastructure installed and fail without it,
+      # which is exactly the deployment nobody tries until it is a managed cluster. And with
+      # the autoscaling off the six Deployments state a replica count where with it on they
+      # must not, which is why the check script is run over two of the three.
+      #
+      # The schema version is the one the kind node image of deploy/k8s/kind-cluster.yaml
+      # runs, so what passes here is what the cluster of make k8s-up would accept.
+      #
+      # ScaledObject is skipped by kind rather than by name of a file, because it is the one
+      # object here whose schema is not part of Kubernetes: it is KEDA's CRD, and the
+      # alternative is fetching a schema catalog over the network to validate two manifests
+      # whose fields a renderer cannot get wrong anyway.
+      #
+      # helm is preinstalled on the runner.
+      - name: Validate the Helm chart
+        run: |
+          python -m pip install --quiet pyyaml
+          helm lint --strict deploy/helm/seatrush
+          mkdir -p target/chart
+          helm template seatrush deploy/helm/seatrush \
+            > target/chart/rendered.yaml
+          helm template seatrush deploy/helm/seatrush \
+            --set infra.enabled=false \
+            --set global.postgres.host=postgres.managed \
+            --set global.redis.host=redis.managed \
+            --set global.kafka.bootstrapServers=kafka.managed:9092 \
+            > target/chart/rendered-managed-infra.yaml
+          helm template seatrush deploy/helm/seatrush \
+            --set global.autoscaling.enabled=false \
+            > target/chart/rendered-no-autoscaling.yaml
+          python scripts/check-chart.py target/chart/rendered.yaml
+          python scripts/check-chart.py target/chart/rendered-no-autoscaling.yaml
+          docker run --rm \
+            --volume "$PWD/target/chart:/chart:ro" \
+            ghcr.io/yannh/kubeconform:v0.7.0 \
+            -strict -summary -kubernetes-version 1.37.0 \
+            -skip ScaledObject \
+            /chart/rendered.yaml \
+            /chart/rendered-managed-infra.yaml \
+            /chart/rendered-no-autoscaling.yaml
+
+      # The add-ons of README section 24.4, which the release does not install and CI has to
+      # check for the same reason it checks the chart: they are manifests, so the way they
+      # fail is a half-applied `kubectl apply` whose first half is whatever sorted earlier.
+      #
+      # prometheus.yml is left out of the list on purpose. It is a Prometheus configuration
+      # that happens to live in this directory and not a Kubernetes manifest, and the step
+      # above is what parses it.
+      - name: Validate the cluster add-ons
+        run: |
+          docker run --rm \
+            --volume "$PWD/deploy/k8s:/k8s:ro" \
+            ghcr.io/yannh/kubeconform:v0.7.0 \
+            -strict -summary -kubernetes-version 1.37.0 \
+            /k8s/observability/namespace.yaml \
+            /k8s/observability/prometheus.yaml \
+            /k8s/observability/kafka-exporter.yaml \
+            /k8s/observability/tempo.yaml \
+            /k8s/observability/grafana.yaml
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/seat-map-ui/package-lock.json
+
+      # From the lock file, so CI builds the dependency tree a checkout builds.
+      - name: Install
+        run: npm ci
+        working-directory: frontend/seat-map-ui
+
+      # The same three gates the Java build has, in the same order: formatting,
+      # then the unit tests, then a build that type checks before it bundles.
+      - name: Prettier
+        run: npm run format:check
+        working-directory: frontend/seat-map-ui
+
+      - name: Test
+        run: npm test
+        working-directory: frontend/seat-map-ui
+
+      - name: Build
+        run: npm run build
+        working-directory: frontend/seat-map-ui
+
+  images:
+    name: Images
+    needs: format
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Every image of the stack, which is what make up starts. The six service images
+      # share one build stage, so this compiles the reactor once; nothing is pushed, and
+      # the point is only that a Dockerfile still builds. A broken one would otherwise be
+      # found by the next person running make up.
+      - name: Build the images
+        run: |
+          docker compose             --file deploy/docker-compose/docker-compose.yml             --env-file .env.example             build
+
+  verify:
+    name: Build and test
+    needs: format
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      # verify runs the whole chain: enforcer, Spotless, compile, the Surefire
+      # unit tests and ArchUnit rules, the Failsafe integration tests of the
+      # modules that declare them (Testcontainers talks to the Docker daemon
+      # preinstalled on the runner), and the JaCoCo report.
+      - name: Verify
+        run: ./mvnw -B -ntp verify
+
+      - name: Upload test reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            **/target/surefire-reports/
+            **/target/failsafe-reports/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload coverage report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: '**/target/site/jacoco/'
+          if-no-files-found: warn
+          retention-days: 7

@@ -1,0 +1,104 @@
+{{- $name := printf "%s-redis" .Release.Name }}
+{{- $labels := dict "context" . "name" "redis" "component" "infrastructure" }}
+{{/*
+Hot state of the hold path: seat hashes, hold keys, the expiry ZSET and the seat event
+stream (README section 9.2).
+
+A Deployment and not a StatefulSet, because there is nothing to keep: persistence is off for
+the same reason it is off in the Compose stack, that the restart-with-data-loss path of
+README section 16 is a behaviour worth exercising rather than hiding behind an AOF file.
+Seat state is rebuilt from seat_sale and frozen holds are recovered from the SAGA side, and
+a cluster where that has never once happened is a cluster where nobody knows whether it
+works.
+
+noeviction, because every key here backs an invariant: under memory pressure Redis must
+refuse writes rather than drop a hold or a seat state.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "seatrush.component.labels" $labels | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: redis
+      port: {{ .Values.global.redis.port }}
+      targetPort: redis
+  selector:
+    {{- include "seatrush.component.selectorLabels" $labels | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "seatrush.component.labels" $labels | nindent 4 }}
+spec:
+  replicas: 1
+  # One instance and nothing shared, so the new pod must not be started while the old one
+  # still holds the keys: a rolling update would have two of them answering at once.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "seatrush.component.selectorLabels" $labels | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "seatrush.component.labels" $labels | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: {{ .Values.redis.uid }}
+        runAsGroup: {{ .Values.redis.uid }}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redis
+          image: {{ .Values.redis.image | quote }}
+          imagePullPolicy: {{ .Values.global.image.pullPolicy | quote }}
+          args:
+            - redis-server
+            - --save
+            - ""
+            - --appendonly
+            - "no"
+            - --maxmemory-policy
+            - noeviction
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            # An open port is not enough: Redis accepts connections while still starting up.
+            exec:
+              command:
+                - redis-cli
+                - ping
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            # Nothing is written here with persistence off, and the server still wants the
+            # directory it would have written to.
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}

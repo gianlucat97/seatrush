@@ -1,0 +1,480 @@
+# The local SeatRush stack (README section 23), started by make up and stopped by make down.
+#
+# The whole system: the infrastructure, the observability wiring, the six services and the
+# demo client. One command brings up something somebody can buy a seat in.
+#
+# Only the gateway and the client publish a port. Everything else is reachable from inside
+# this network alone, which is the arrangement README section 24 gives the cluster with
+# NetworkPolicies and the one README section 13 relies on: a service behind the gateway
+# trusts the identity header it is handed because nothing else can reach it.
+#
+# Values come from .env, which make up copies from .env.example on first run. Every
+# reference carries the same default, so the stack also starts with no .env at all.
+name: seatrush
+
+services:
+  # One server, one database per owning service (README section 11). Each service holds
+  # credentials for its own database only, and Flyway owns the schema inside it.
+  postgres:
+    image: postgres:17-alpine
+    container_name: seatrush-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-seatrush}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-seatrush}
+      # The maintenance database the init script connects to; the three service
+      # databases are created from it.
+      POSTGRES_DB: seatrush
+      POSTGRES_INVENTORY_DB: ${POSTGRES_INVENTORY_DB:-seatrush_inventory}
+      POSTGRES_ORDER_DB: ${POSTGRES_ORDER_DB:-seatrush_order}
+      POSTGRES_PAYMENT_DB: ${POSTGRES_PAYMENT_DB:-seatrush_payment}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # $$ reaches the container as a single $, so the check reads the container's own
+      # environment instead of being interpolated by Compose.
+      test: ["CMD-SHELL", "pg_isready --username $${POSTGRES_USER} --dbname $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  # Hot state of the hold path: seat hashes, hold keys, the expiry ZSET and the seat-event
+  # stream (README section 9.2).
+  redis:
+    image: redis:7.4-alpine
+    container_name: seatrush-redis
+    # noeviction, because every key here backs an invariant: under memory pressure Redis
+    # must refuse writes rather than drop a hold or a seat state.
+    #
+    # Persistence stays off. The local stack is disposable, make down removes its volumes
+    # anyway, and the restart-with-data-loss path of README section 16 (seat state rebuilt
+    # from seat_sale, frozen holds failing CommitSeats) is a behaviour worth exercising
+    # rather than hiding behind an AOF file.
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory-policy
+      - noeviction
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      # An open port is not enough: Redis accepts connections while still starting up.
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  # Single broker in KRaft mode, no ZooKeeper (README section 10).
+  kafka:
+    image: apache/kafka:4.1.0
+    container_name: seatrush-kafka
+    environment:
+      # A fixed cluster id, so the log directory on the volume stays valid when the
+      # container is recreated: the broker refuses to start on a directory formatted
+      # with a different one.
+      CLUSTER_ID: "5L6g3nShT-eMCtK--X86sw"
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      # Two client listeners on purpose: containers of this stack reach the broker as
+      # kafka:9092, while a test or a tool on the host reaches it as localhost:${KAFKA_PORT}.
+      # An advertised address has to be resolvable by the client that receives it, and no
+      # single address is resolvable from both sides.
+      KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093,HOST://:29092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,HOST://localhost:${KAFKA_PORT:-9092}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # One broker, so every internal topic is single-replica.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      # No reason to delay the first rebalance locally.
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+      # Topics are created by kafka-init with the partition count section 10.1 specifies.
+      # Auto-creation would silently give a mistyped topic name one partition and no error.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    ports:
+      - "${KAFKA_PORT:-9092}:29092"
+    volumes:
+      # Keeps the commit log and the consumer offsets across a recreate of the container.
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+    restart: unless-stopped
+
+  # Creates the topics of README section 10.1 and exits.
+  #
+  # It runs when its container is created, which is every make up after a make down.
+  # A make up on a stack that is already there leaves the exited container alone, so a
+  # topic added to the script lands with
+  # docker compose up --detach --force-recreate --no-deps kafka-init
+  # and the script is idempotent, so that costs nothing and never touches the broker.
+  kafka-init:
+    image: apache/kafka:4.1.0
+    container_name: seatrush-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      BOOTSTRAP_SERVER: kafka:9092
+    entrypoint: ["/bin/sh", "/opt/seatrush/create-topics.sh"]
+    volumes:
+      - ./kafka/create-topics.sh:/opt/seatrush/create-topics.sh:ro
+    restart: "no"
+
+  # Consumer lag and topic offsets, which is the half of README section 14.1 that no service can
+  # report about itself: a consumer knows how far it has read and not how far the log goes, and the
+  # difference between the two is the only measure of whether a pipeline is keeping up. It is also
+  # where the dead letter alert reads from, because nothing consumes a .dlq topic and its depth is
+  # a fact about the broker rather than about any service.
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.9.0
+    container_name: seatrush-kafka-exporter
+    depends_on:
+      kafka:
+        condition: service_healthy
+    command:
+      - --kafka.server=kafka:9092
+      # Everything, because every topic of section 10.1 has a companion .dlq and the point of
+      # watching them is that they are normally empty.
+      - --topic.filter=.*
+      - --group.filter=.*
+    # No port published. Prometheus is a container of this stack and reaches it by name; nothing
+    # on the host has a reason to read it.
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.15.1
+    container_name: seatrush-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      # So a changed scrape config can be reloaded without restarting the container.
+      - --web.enable-lifecycle
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ../prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
+
+  # Where a span goes to be read again (README section 14.2). A service pushes OTLP over the
+  # published port; Grafana queries it over the stack network.
+  tempo:
+    image: grafana/tempo:2.9.1
+    container_name: seatrush-tempo
+    command: ["-config.file=/etc/tempo/tempo.yml"]
+    ports:
+      # The OTLP receiver, which is what every service exports to.
+      - "${OTLP_PORT:-4318}:4318"
+      # The query API, which is also how a verification run reads a trace back by its id.
+      - "${TEMPO_PORT:-3200}:3200"
+    volumes:
+      - ../tempo/tempo.yml:/etc/tempo/tempo.yml:ro
+      - tempo-data:/var/tempo
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:3200/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:13.2.4
+    container_name: seatrush-grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # Local only: the dashboards open without a login, editing still needs the admin user.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_LOG_LEVEL: warn
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      # Datasource and dashboard providers are provisioned as code (README section 14.4).
+      # Each provisioning directory is mounted on its own rather than the whole
+      # /etc/grafana/provisioning: mounting the parent hides the plugins and alerting
+      # directories of the image, and Grafana logs an error for each one it cannot read.
+      - ../grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ../grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      # Outside /var/lib/grafana, so the dashboards do not collide with the data volume.
+      - ../grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------------------
+  # The services (README section 6). One image per module, all six from one Dockerfile; its
+  # build stage is shared, so the reactor is compiled once and the other five images are an
+  # unpack and a copy.
+  #
+  # Three things are set here rather than taken from .env, because inside this network they
+  # are not a choice. The hostnames are the names Compose resolves and not the published
+  # ports a developer's own `java -jar` would use; the OTLP endpoint is the collector by
+  # name; and the two services that have to agree on a secret are handed the same one.
+  # ---------------------------------------------------------------------------------------
+
+  # Owns the seat map, the holds and the sale (README section 6.3).
+  inventory-service:
+    build: &service-build
+      context: ../..
+      dockerfile: deploy/docker-compose/Dockerfile
+      args:
+        SERVICE: inventory-service
+    image: seatrush/inventory-service:${SEATRUSH_VERSION:-dev}
+    container_name: seatrush-inventory-service
+    depends_on: &owns-a-database
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      tempo:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-local}
+      POSTGRES_URL: jdbc:postgresql://postgres:5432/${POSTGRES_INVENTORY_DB:-seatrush_inventory}
+      POSTGRES_USER: ${POSTGRES_USER:-seatrush}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-seatrush}
+      REDIS_HOST: redis
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SEATRUSH_OTLP_ENDPOINT: &otlp http://tempo:4318/v1/traces
+      SEATRUSH_HOLD_TTL: ${SEATRUSH_HOLD_TTL:-5m}
+      SEATRUSH_HOLD_MAX_SEATS: ${SEATRUSH_HOLD_MAX_SEATS:-6}
+    healthcheck: &actuator-health
+      # readiness and not health: a service answers liveness before Flyway and its Lua
+      # scripts are loaded, and make up waits on this to call the stack usable.
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8081/actuator/health/readiness"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 30s
+    restart: unless-stopped
+
+  # The checkout SAGA (README section 6.4).
+  order-service:
+    build:
+      <<: *service-build
+      args:
+        SERVICE: order-service
+    image: seatrush/order-service:${SEATRUSH_VERSION:-dev}
+    container_name: seatrush-order-service
+    depends_on:
+      <<: *owns-a-database
+      inventory-service:
+        # The freeze of README section 12.7 is synchronous, and it is the first thing a
+        # checkout does.
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-local}
+      POSTGRES_URL: jdbc:postgresql://postgres:5432/${POSTGRES_ORDER_DB:-seatrush_order}
+      POSTGRES_USER: ${POSTGRES_USER:-seatrush}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-seatrush}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SEATRUSH_OTLP_ENDPOINT: *otlp
+      SEATRUSH_INVENTORY_BASE_URL: http://inventory-service:8081
+      SEATRUSH_CHECKOUT_TIMEOUT: ${SEATRUSH_CHECKOUT_TIMEOUT:-2m}
+      # The pair tickets are signed with (README section 13). Empty means a throwaway pair
+      # per process, which is enough to buy a ticket and not enough to verify one tomorrow.
+      SEATRUSH_TICKETS_PRIVATE_KEY: ${SEATRUSH_TICKETS_PRIVATE_KEY:-}
+      SEATRUSH_TICKETS_PUBLIC_KEY: ${SEATRUSH_TICKETS_PUBLIC_KEY:-}
+    healthcheck:
+      <<: *actuator-health
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8082/actuator/health/readiness"]
+    restart: unless-stopped
+
+  # The payment provider, simulated (README section 6.5).
+  payment-service:
+    build:
+      <<: *service-build
+      args:
+        SERVICE: payment-service
+    image: seatrush/payment-service:${SEATRUSH_VERSION:-dev}
+    container_name: seatrush-payment-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      tempo:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-local}
+      POSTGRES_URL: jdbc:postgresql://postgres:5432/${POSTGRES_PAYMENT_DB:-seatrush_payment}
+      POSTGRES_USER: ${POSTGRES_USER:-seatrush}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-seatrush}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SEATRUSH_OTLP_ENDPOINT: *otlp
+      SEATRUSH_PAYMENT_DECLINE_RATE: ${SEATRUSH_PAYMENT_DECLINE_RATE:-0.05}
+    healthcheck:
+      <<: *actuator-health
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8083/actuator/health/readiness"]
+    restart: unless-stopped
+
+  # The waiting room: the lobby, the queue and the door of a sale (README section 6.2).
+  queue-service:
+    build:
+      <<: *service-build
+      args:
+        SERVICE: queue-service
+    image: seatrush/queue-service:${SEATRUSH_VERSION:-dev}
+    container_name: seatrush-queue-service
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      tempo:
+        condition: service_healthy
+      inventory-service:
+        # It reads the event catalog on an interval to know which sales are open.
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-local}
+      REDIS_HOST: redis
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SEATRUSH_OTLP_ENDPOINT: *otlp
+      SEATRUSH_INVENTORY_BASE_URL: http://inventory-service:8081
+      # The same secret as the gateway, and that is why it is set rather than generated:
+      # queue-service mints an admission and the gateway checks it, so two generated secrets
+      # would be two services refusing each other's tokens and every purchase answering 403.
+      SEATRUSH_ADMISSION_SECRET: ${SEATRUSH_ADMISSION_SECRET:?both halves of the door need the same one, see .env.example}
+      SEATRUSH_ADMISSION_TOKEN_TTL: ${SEATRUSH_ADMISSION_TOKEN_TTL:-10m}
+      SEATRUSH_ADMISSION_RATE_PER_SECOND: ${SEATRUSH_ADMISSION_RATE_PER_SECOND:-500}
+      SEATRUSH_ADMISSION_MAX_ACTIVE_USERS: ${SEATRUSH_ADMISSION_MAX_ACTIVE_USERS:-5000}
+      SEATRUSH_QUEUE_CATALOG_REFRESH_INTERVAL: ${SEATRUSH_QUEUE_CATALOG_REFRESH_INTERVAL:-1s}
+      SEATRUSH_QUEUE_POSITION_UPDATE_INTERVAL: ${SEATRUSH_QUEUE_POSITION_UPDATE_INTERVAL:-3s}
+      SEATRUSH_SSE_HEARTBEAT_INTERVAL: ${SEATRUSH_SSE_HEARTBEAT_INTERVAL:-15s}
+      SEATRUSH_SSE_TIMEOUT: ${SEATRUSH_SSE_TIMEOUT:-30m}
+    healthcheck:
+      <<: *actuator-health
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8084/actuator/health/readiness"]
+    restart: unless-stopped
+
+  # The live half of the seat map, which owns no state at all (README section 6.6).
+  realtime-service:
+    build:
+      <<: *service-build
+      args:
+        SERVICE: realtime-service
+    image: seatrush/realtime-service:${SEATRUSH_VERSION:-dev}
+    container_name: seatrush-realtime-service
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      tempo:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-local}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SEATRUSH_OTLP_ENDPOINT: *otlp
+      SEATRUSH_REALTIME_BATCH_WINDOW: ${SEATRUSH_REALTIME_BATCH_WINDOW:-200ms}
+      SEATRUSH_SSE_HEARTBEAT_INTERVAL: ${SEATRUSH_SSE_HEARTBEAT_INTERVAL:-15s}
+      SEATRUSH_SSE_TIMEOUT: ${SEATRUSH_SSE_TIMEOUT:-30m}
+    healthcheck:
+      <<: *actuator-health
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8085/actuator/health/readiness"]
+    restart: unless-stopped
+
+  # The one door into the system (README section 6.1).
+  gateway:
+    build:
+      <<: *service-build
+      args:
+        SERVICE: gateway
+    image: seatrush/gateway:${SEATRUSH_VERSION:-dev}
+    container_name: seatrush-gateway
+    depends_on:
+      inventory-service:
+        condition: service_healthy
+      order-service:
+        condition: service_healthy
+      queue-service:
+        condition: service_healthy
+      realtime-service:
+        condition: service_healthy
+      # The token buckets of README section 13, and the only store this service touches.
+      redis:
+        condition: service_healthy
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-local}
+      SEATRUSH_OTLP_ENDPOINT: *otlp
+      SEATRUSH_GATEWAY_INVENTORY_URL: http://inventory-service:8081
+      SEATRUSH_GATEWAY_ORDER_URL: http://order-service:8082
+      SEATRUSH_GATEWAY_QUEUE_URL: http://queue-service:8084
+      SEATRUSH_GATEWAY_REALTIME_URL: http://realtime-service:8085
+      REDIS_HOST: redis
+      SEATRUSH_AUTH_SECRET: ${SEATRUSH_AUTH_SECRET:?the demo login signs with it, see .env.example}
+      SEATRUSH_AUTH_TOKEN_TTL: ${SEATRUSH_AUTH_TOKEN_TTL:-1h}
+      SEATRUSH_ADMISSION_SECRET: ${SEATRUSH_ADMISSION_SECRET:?both halves of the door need the same one, see .env.example}
+      SEATRUSH_ADMISSION_TOKEN_TTL: ${SEATRUSH_ADMISSION_TOKEN_TTL:-10m}
+      # The one place a trace is born (README section 14.2).
+      SEATRUSH_TRACING_SAMPLE_RATE: ${SEATRUSH_TRACING_SAMPLE_RATE:-1.0}
+    healthcheck:
+      <<: *actuator-health
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8080/actuator/health/readiness"]
+    restart: unless-stopped
+
+  # The demo client (README section 6.7): the bundle, and the /api proxy that puts it on the
+  # same origin as the API. That proxy is why nothing in this repository configures CORS.
+  ui:
+    build:
+      context: ../..
+      dockerfile: deploy/docker-compose/ui.Dockerfile
+    image: seatrush/seat-map-ui:${SEATRUSH_VERSION:-dev}
+    container_name: seatrush-ui
+    depends_on:
+      gateway:
+        condition: service_healthy
+    ports:
+      - "${UI_PORT:-5173}:80"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:80/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  kafka-data:
+  prometheus-data:
+  grafana-data:
+  tempo-data:
+
+networks:
+  # A fixed name, so a service started outside this file can still join the stack.
+  default:
+    name: seatrush

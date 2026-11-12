@@ -1,0 +1,364 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.seatrush</groupId>
+  <artifactId>seatrush-parent</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+  <packaging>pom</packaging>
+
+  <name>SeatRush</name>
+  <description>Distributed ticketing platform for high-demand flash on-sales</description>
+  <url>https://github.com/gianlucat97/seatrush</url>
+
+  <licenses>
+    <license>
+      <name>MIT License</name>
+      <url>https://opensource.org/licenses/MIT</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+
+  <!-- Modules are added by the milestones that introduce them (see README §26). -->
+  <modules>
+    <module>libs/common</module>
+    <module>libs/test-support</module>
+    <module>libs/messaging</module>
+    <module>libs/observability</module>
+    <module>libs/security</module>
+    <module>services/inventory-service</module>
+    <module>services/gateway</module>
+    <module>services/queue-service</module>
+    <module>services/order-service</module>
+    <module>services/payment-service</module>
+    <module>services/realtime-service</module>
+  </modules>
+
+  <properties>
+    <java.version>25</java.version>
+    <maven.compiler.release>${java.version}</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+    <!-- Minimum build environment, enforced by maven-enforcer-plugin. -->
+    <minimum.maven.version>3.9.6</minimum.maven.version>
+
+    <!-- Dependency BOMs -->
+    <spring-boot.version>4.0.8</spring-boot.version>
+    <!-- The release train that targets Boot 4: it brings Spring Cloud Gateway, which is the
+         only thing this repository takes from it (README section 6.1). -->
+    <spring-cloud.version>2025.1.0</spring-cloud.version>
+    <testcontainers.version>2.0.5</testcontainers.version>
+    <archunit.version>1.5.1</archunit.version>
+    <!-- JOSE for the user JWT and the admission token (README §13). Not managed by the Boot
+         BOM, and pinned to the version Spring Security 7.0.x brings in transitively, so the
+         gateway's resource server and libs/security share one implementation. -->
+    <nimbus-jose-jwt.version>10.4</nimbus-jose-jwt.version>
+    <!-- The JSON Schema validator of the message contract test of README section 17. Test scope
+         only, and it brings a Jackson 2 of its own: this repository serializes with Jackson 3, so
+         the validator reads the documents with its own parser while the messages under test are
+         encoded with the mapper the services publish with. That separation is the point rather than
+         an accident, since a schema checked by the serializer that produced the bytes would agree
+         with itself. -->
+    <json-schema-validator.version>1.5.9</json-schema-validator.version>
+    <!-- springdoc, which serves the OpenAPI document of every service (README section 12). The
+         3.0.x line is the Spring Boot 4.0 one: 2.x is built against Boot 3 and 3.1.x and later
+         against Boot 4.1, and this is the only version range whose parent is the Boot minor
+         these services run on. Not managed by the Boot BOM, so the version lives here. -->
+    <springdoc.version>3.0.3</springdoc.version>
+
+    <!-- Build plugins -->
+    <maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
+    <maven-surefire-plugin.version>3.6.0</maven-surefire-plugin.version>
+    <maven-failsafe-plugin.version>3.6.0</maven-failsafe-plugin.version>
+    <maven-enforcer-plugin.version>3.6.3</maven-enforcer-plugin.version>
+    <spotless-maven-plugin.version>3.10.4</spotless-maven-plugin.version>
+    <!-- 1.37.0 never runs inside Spotless on JDK 25: every file fails with an
+         InvocationTargetException before it is formatted. -->
+    <google-java-format.version>1.36.1</google-java-format.version>
+    <jacoco-maven-plugin.version>0.8.15</jacoco-maven-plugin.version>
+    <!-- The Boot plugin follows the Boot version: it is the one that repackages a service. -->
+    <spring-boot-maven-plugin.version>${spring-boot.version}</spring-boot-maven-plugin.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-dependencies</artifactId>
+        <version>${spring-boot.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>org.springframework.cloud</groupId>
+        <artifactId>spring-cloud-dependencies</artifactId>
+        <version>${spring-cloud.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>org.testcontainers</groupId>
+        <artifactId>testcontainers-bom</artifactId>
+        <version>${testcontainers.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>com.nimbusds</groupId>
+        <artifactId>nimbus-jose-jwt</artifactId>
+        <version>${nimbus-jose-jwt.version}</version>
+      </dependency>
+      <!-- The OpenTelemetry starter of README section 14.2, minus the Micrometer OTLP metrics
+           registry it drags in. This system pushes traces and has its metrics scraped
+           (section 14.1), and that artifact activates a second metrics exporter nobody
+           configured: it pushed to http://localhost:4318/v1/metrics once a minute, in six
+           services, and warned every time. Managed here rather than in six service POMs, so
+           the decision is in one place and a new service inherits it. -->
+      <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-opentelemetry</artifactId>
+        <version>${spring-boot.version}</version>
+        <exclusions>
+          <exclusion>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-otlp</artifactId>
+          </exclusion>
+        </exclusions>
+      </dependency>
+      <dependency>
+        <groupId>com.networknt</groupId>
+        <artifactId>json-schema-validator</artifactId>
+        <version>${json-schema-validator.version}</version>
+        <scope>test</scope>
+      </dependency>
+      <!-- The two springdoc starters, one per web stack: five services are Spring MVC and the
+           gateway is WebFlux. Both are the -api artifact rather than the -ui one, so what each
+           service gains is the document at /v3/api-docs and not a bundled Swagger UI. The UI is a
+           console, this system already has one way in (README section 6.7), and shipping twelve
+           megabytes of static assets inside six images to get it is not a trade worth making. -->
+      <dependency>
+        <groupId>org.springdoc</groupId>
+        <artifactId>springdoc-openapi-starter-webmvc-api</artifactId>
+        <version>${springdoc.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.springdoc</groupId>
+        <artifactId>springdoc-openapi-starter-webflux-api</artifactId>
+        <version>${springdoc.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.tngtech.archunit</groupId>
+        <artifactId>archunit-junit5</artifactId>
+        <version>${archunit.version}</version>
+        <scope>test</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <build>
+    <pluginManagement>
+      <plugins>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <version>${maven-compiler-plugin.version}</version>
+          <configuration>
+            <release>${maven.compiler.release}</release>
+            <parameters>true</parameters>
+            <compilerArgs>
+              <arg>-Xlint:all,-serial,-processing</arg>
+            </compilerArgs>
+          </configuration>
+        </plugin>
+
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <version>${maven-surefire-plugin.version}</version>
+          <configuration>
+            <!-- Unit tests only; integration tests are run by Failsafe (README §21). -->
+            <excludes>
+              <exclude>**/*IT.java</exclude>
+            </excludes>
+          </configuration>
+        </plugin>
+
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-failsafe-plugin</artifactId>
+          <version>${maven-failsafe-plugin.version}</version>
+          <configuration>
+            <includes>
+              <include>**/*IT.java</include>
+            </includes>
+            <systemPropertyVariables>
+              <!-- What the build calls itself, which the integration tests that publish the
+                   OpenAPI documents of README section 12 compare against the version each
+                   service declares. Six hand-written version strings would otherwise go stale
+                   one release at a time, each of them in a published contract. -->
+              <seatrush.project.version>${project.version}</seatrush.project.version>
+            </systemPropertyVariables>
+          </configuration>
+          <executions>
+            <execution>
+              <goals>
+                <goal>integration-test</goal>
+                <goal>verify</goal>
+              </goals>
+            </execution>
+          </executions>
+        </plugin>
+
+        <!-- Services only: it turns the jar of a service into one that can be started.
+             spring-boot-dependencies manages dependencies and not plugins, so the version
+             is pinned here rather than inherited from spring-boot-starter-parent, which
+             this build deliberately does not use as its parent. -->
+        <plugin>
+          <groupId>org.springframework.boot</groupId>
+          <artifactId>spring-boot-maven-plugin</artifactId>
+          <version>${spring-boot-maven-plugin.version}</version>
+          <configuration>
+            <!-- The startable jar is attached as seatrush-<service>-<version>-boot.jar and
+                 the plain one stays the main artifact. Without the classifier, repackage
+                 replaces it, and Failsafe then runs against a jar whose classes live under
+                 BOOT-INF: every integration test fails to even load its own classes. -->
+            <classifier>boot</classifier>
+          </configuration>
+          <executions>
+            <execution>
+              <id>repackage</id>
+              <goals>
+                <goal>repackage</goal>
+              </goals>
+            </execution>
+          </executions>
+        </plugin>
+
+        <plugin>
+          <groupId>org.jacoco</groupId>
+          <artifactId>jacoco-maven-plugin</artifactId>
+          <version>${jacoco-maven-plugin.version}</version>
+          <executions>
+            <execution>
+              <id>prepare-agent</id>
+              <goals>
+                <goal>prepare-agent</goal>
+              </goals>
+            </execution>
+            <execution>
+              <id>report</id>
+              <goals>
+                <goal>report</goal>
+              </goals>
+              <phase>verify</phase>
+            </execution>
+          </executions>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-enforcer-plugin</artifactId>
+        <version>${maven-enforcer-plugin.version}</version>
+        <executions>
+          <execution>
+            <id>enforce-build-environment</id>
+            <goals>
+              <goal>enforce</goal>
+            </goals>
+            <configuration>
+              <rules>
+                <requireMavenVersion>
+                  <version>[${minimum.maven.version},)</version>
+                </requireMavenVersion>
+                <requireJavaVersion>
+                  <version>[${java.version},)</version>
+                </requireJavaVersion>
+              </rules>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- Formatting is part of the build: CI fails on unformatted code (README §21). -->
+      <plugin>
+        <groupId>com.diffplug.spotless</groupId>
+        <artifactId>spotless-maven-plugin</artifactId>
+        <version>${spotless-maven-plugin.version}</version>
+        <configuration>
+          <java>
+            <googleJavaFormat>
+              <version>${google-java-format.version}</version>
+            </googleJavaFormat>
+            <removeUnusedImports />
+            <trimTrailingWhitespace />
+            <endWithNewline />
+          </java>
+          <pom>
+            <sortPom>
+              <expandEmptyElements>false</expandEmptyElements>
+              <spaceBeforeCloseEmptyElement>true</spaceBeforeCloseEmptyElement>
+            </sortPom>
+          </pom>
+          <formats>
+            <format>
+              <includes>
+                <include>.gitignore</include>
+                <include>**/*.lua</include>
+                <include>**/*.yaml</include>
+                <include>**/*.yml</include>
+              </includes>
+              <excludes>
+                <exclude>**/target/**</exclude>
+                <exclude>**/node_modules/**</exclude>
+              </excludes>
+              <trimTrailingWhitespace />
+              <endWithNewline />
+            </format>
+          </formats>
+        </configuration>
+        <executions>
+          <execution>
+            <id>spotless-check</id>
+            <goals>
+              <goal>check</goal>
+            </goals>
+            <phase>validate</phase>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+
+  <!-- The load-tests modules of README section 20, in a profile that is on unless somebody
+       turns it off. They are part of the build and their tests run in CI like any others; what
+       they are not is part of a deployable image, and the build context of
+       deploy/docker-compose/Dockerfile is deliberately narrower than the repository.
+
+       A profile rather than a plain module, because Maven reads the whole module tree before it
+       applies -pl or anything else: a reactor rooted at a context without load-tests/ stops on
+       a child module that does not exist, before a single project is built, and no choice of
+       projects on the command line can get past it.
+
+       Activated by the absence of a property rather than with activeByDefault, which is the trap
+       that setting carries: a default profile is switched off the moment any other profile is
+       named with -P, and the load tests would then disappear from the reactor without a word.
+       This one is on until -DskipLoadTests says otherwise. -->
+  <profiles>
+    <profile>
+      <id>load-tests</id>
+      <activation>
+        <property>
+          <name>!skipLoadTests</name>
+        </property>
+      </activation>
+      <modules>
+        <module>load-tests/invariant-checker</module>
+        <module>load-tests/gatling</module>
+      </modules>
+    </profile>
+  </profiles>
+</project>

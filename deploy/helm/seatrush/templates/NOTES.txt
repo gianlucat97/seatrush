@@ -1,0 +1,83 @@
+SeatRush {{ .Chart.AppVersion }} is installed as {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+
+What is running:
+
+  kubectl --namespace {{ .Release.Namespace }} get pods --selector app.kubernetes.io/part-of=seatrush
+
+{{- if .Values.ingress.enabled }}
+
+The client and the API share one origin through the Ingress, which is the only thing in this
+release reachable from outside the cluster:
+{{- if .Values.ingress.host }}
+
+  http{{ if .Values.ingress.tls }}s{{ end }}://{{ .Values.ingress.host }}/           the seat map
+  http{{ if .Values.ingress.tls }}s{{ end }}://{{ .Values.ingress.host }}/api/       the gateway
+{{- else }}
+
+  On kind, the ingress controller answers on the port the cluster of deploy/k8s maps:
+
+    http://localhost:8088/           the seat map
+    http://localhost:8088/api/       the gateway
+
+  The host is unset, so the rule matches any: a real deployment names one in
+  ingress.host and brings a certificate for it.
+{{- end }}
+{{- else }}
+
+No Ingress, so nothing is reachable from outside the cluster. A port-forward is the way in:
+
+  kubectl --namespace {{ .Release.Namespace }} port-forward service/{{ include "seatrush.release" . }}-gateway 8080:8080
+{{- end }}
+
+Then a sale, which is a demo event with 2,000 seats opening in two minutes:
+
+  make k8s-seed
+
+{{ if eq .Values.global.profile "local" -}}
+The services run with the `local` profile, so the demo login of README section 12.1 answers
+and a browser can get a token. That is what makes this a demo; the `k8s` profile of README
+section 22 switches it off, and a deployment facing anything but a laptop sets it.
+{{- else -}}
+The services run with the `{{ .Values.global.profile }}` profile, so the demo login of README
+section 12.1 is not there: a client needs a token from somewhere else, and `make k8s-seed`
+cannot get one on its own.
+{{- end }}
+
+{{- if .Values.global.networkPolicy.enabled }}
+
+Every pod in this namespace is behind a deny-all NetworkPolicy, with one named permission per
+call the release makes (README section 24.7). Two namespaces are let in: `{{ .Values.global.networkPolicy.ingressNamespace }}`
+for the gateway and the client, and `{{ .Values.global.networkPolicy.observabilityNamespace }}` for the scrape.
+
+  kubectl --namespace {{ .Release.Namespace }} get networkpolicy
+
+A cluster whose CNI does not implement NetworkPolicy would accept all of that and enforce none
+of it, which is what `global.networkPolicy.enabled=false` is for.
+{{- end }}
+{{- if not .Values.global.secrets.existingSecret }}
+
+The four secrets of README section 13 come from this chart's values and are the fake ones:
+decode them and they say so. Anything that is not a laptop sets
+`global.secrets.existingSecret` to a Secret it manages itself.
+{{- end }}
+{{- if not .Values.global.otlpEndpoint }}
+
+No service exports a span: `global.otlpEndpoint` is empty, which is the right answer for a
+cluster with nothing collecting them. What collects them is not part of this release
+(README section 24.4), and `make k8s-up` installs it and names it with
+deploy/k8s/release-observability-values.yaml.
+{{- end }}
+{{- if .Values.global.autoscaling.enabled }}
+
+Every service is autoscaled (README section 24.3), which needs three things this release
+does not install: metrics-server for the two HPAs on CPU, prometheus-adapter for the two on
+SSE connections, and KEDA for the two ScaledObjects on consumer lag.
+
+  make k8s-observability     install all three, and the Prometheus they read
+  make k8s-hpa               what each of them currently reads
+{{- else }}
+
+Nothing is autoscaled: `global.autoscaling.enabled` is false, so the six services run at the
+replica counts of their subcharts and nothing here refers to a metrics API or to a CRD
+(README section 24.3).
+{{- end }}

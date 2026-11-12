@@ -1,0 +1,77 @@
+openapi: 3.1.0
+info:
+  description: "A simulated payment provider with an audit trail, whose configurable\
+    \ decline rate and latency tail are what turn the compensations of the checkout\
+    \ SAGA into a path a benchmark drives thousands of times (README section 6.5)."
+  title: SeatRush payment-service
+  version: 0.1.0
+servers:
+- description: The service itself. Every path here is under /internal and none of
+    them is exposed by the gateway (README section 12.7)
+  url: /
+tags:
+- description: "Not exposed by the gateway, and called by another service or by an\
+    \ operator (README section 12.7)"
+  name: Internal
+paths:
+  /internal/config:
+    get:
+      operationId: current
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettingsResponse"
+          description: OK
+      tags:
+      - Internal
+    put:
+      operationId: replace
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SettingsBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettingsResponse"
+          description: OK
+      tags:
+      - Internal
+components:
+  schemas:
+    SettingsBody:
+      type: object
+      properties:
+        declineRate:
+          type: number
+          format: double
+          maximum: 1.0
+          minimum: 0.0
+        latencyMsP50:
+          type: integer
+          format: int64
+        latencyMsP99:
+          type: integer
+          format: int64
+      required:
+      - declineRate
+      - latencyMsP50
+      - latencyMsP99
+    SettingsResponse:
+      type: object
+      properties:
+        declineRate:
+          type: number
+          format: double
+        latencyMsP50:
+          type: integer
+          format: int64
+        latencyMsP99:
+          type: integer
+          format: int64

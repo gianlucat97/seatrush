@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.seatrush</groupId>
+    <artifactId>seatrush-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>seatrush-gatling</artifactId>
+
+  <name>SeatRush Gatling</name>
+  <description>The load test of README section 18, as Gatling simulations in the Java DSL</description>
+
+  <properties>
+    <gatling.version>3.16.0</gatling.version>
+    <gatling-maven-plugin.version>4.21.12</gatling-maven-plugin.version>
+  </properties>
+
+  <dependencies>
+    <!-- The Java DSL and the HTML report. gatling-charts-highcharts is the whole runtime: the
+         core, the HTTP protocol and the report writer that produces what section 18.3 publishes. -->
+    <dependency>
+      <groupId>io.gatling.highcharts</groupId>
+      <artifactId>gatling-charts-highcharts</artifactId>
+      <version>${gatling.version}</version>
+      <scope>test</scope>
+    </dependency>
+
+    <!-- The venue layout and the profile are ordinary logic and are unit tested like any other.
+         They live beside the simulation in src/test/java because that is where the Gatling plugin
+         looks for one, so Surefire picks them up from there as well. -->
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.assertj</groupId>
+      <artifactId>assertj-core</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+      </plugin>
+      <!-- Declared with no execution on purpose: `gatling:test` has a default phase, and binding
+           it would make `mvn verify` run a load test. A run is a command somebody types
+           (scripts/load.sh), never a step of the build. -->
+      <plugin>
+        <groupId>io.gatling</groupId>
+        <artifactId>gatling-maven-plugin</artifactId>
+        <version>${gatling-maven-plugin.version}</version>
+      </plugin>
+    </plugins>
+  </build>
+</project>
